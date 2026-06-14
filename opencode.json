@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md"],
+  "formatter": {
+    "disabled": true
+  },
+  "agent": {
+    "dsp-expert": {
+      "description": "Expert DSP audio pour InvisibleFix",
+      "mode": "subagent",
+      "prompt": "{file:.opencode/agents/dsp-expert.md}"
+    }
+  }
+}

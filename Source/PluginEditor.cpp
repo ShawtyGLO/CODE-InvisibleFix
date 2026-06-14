@@ -360,15 +360,15 @@ void InvisibleFixAudioProcessorEditor::resized()
     int sLabelY = 175;
 
     // Modifie les coordonnées (X, Y, Largeur, Hauteur) selon ton design
-    deEssSlider.setBounds(150, 50, 80, 80);
+    deEssSlider.setBounds(90, sY + 2, 50, 50);
 
     masterGainLabel.setBounds(getWidth() - 195, 0, 75, 35);
     masterGainSlider.setBounds(getWidth() - 115, 8, 100, 20);
 
-    cleanSlider.slider.setBounds(47, sY, sSize, sSize);
-    cleanSlider.label.setBounds(47, sLabelY, sSize, 15);
+    cleanSlider.slider.setBounds(35, sY, 55, 55);
+    cleanSlider.label.setBounds(35, sLabelY, 55, 15);
 
-    deltaBtn.button.setBounds(108, 62, 14, 14);
+    deltaBtn.button.setBounds(70, 62, 14, 14);
 
     roomSlider.slider.setBounds(192, sY, 52, 52);
     roomSlider.label.setBounds(192, sLabelY - 14, 52, 14);
