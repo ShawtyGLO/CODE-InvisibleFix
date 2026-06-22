@@ -44,6 +44,25 @@ public:
 static ModernSliderLookAndFeel modernSliderLookAndFeelInstance;
 
 // =============================================================================
+//  BOUTONS PLATS — aucun bord visible, fond transparent sauf état actif
+// =============================================================================
+class FlatButtonLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    void drawButtonBackground(juce::Graphics& g, juce::Button& b,
+                               const juce::Colour&, bool, bool) override
+    {
+        if (b.getToggleState())
+        {
+            g.setColour(b.findColour(juce::TextButton::buttonOnColourId));
+            g.fillRoundedRectangle(b.getLocalBounds().toFloat().reduced(1.0f), 3.0f);
+        }
+        // Off state : aucun fond, aucun bord
+    }
+};
+static FlatButtonLookAndFeel flatButtonLAF;
+
+// =============================================================================
 //  COMPOSANT : RoomVisualizer (Écran Graphique pour le Notch)
 // =============================================================================
 class RoomVisualizer : public juce::Component, private juce::Timer
@@ -58,75 +77,68 @@ public:
 
     void paint(juce::Graphics& g) override
     {
-        g.fillAll(juce::Colour(0xFF12161A));
+        float w = (float)getWidth();
+        float h = (float)getHeight();
 
-        // Grille d'arrière-plan discrète
-        g.setColour(juce::Colour(0xFF1A2229));
-        for (float x = 0.25f; x < 1.0f; x += 0.25f)
-            g.drawVerticalLine(static_cast<int>(getWidth() * x), 0.0f, static_cast<float>(getHeight()));
-        for (float y = 0.25f; y < 1.0f; y += 0.25f)
-            g.drawHorizontalLine(static_cast<int>(getHeight() * y), 0.0f, static_cast<float>(getWidth()));
+        // === HEATMAP — couvre tout le fond (remplace le fillAll noir) ===
+        processor.copyFftMagnitudes(displayMags, 2048);
+        float sr = (float)processor.getSampleRate();
+        if (sr < 1.0f) sr = 44100.0f;
 
-        auto& apvts = processor.apvts;
-        float knobRoom = *apvts.getRawParameterValue("room");
-        float knobFocus = *apvts.getRawParameterValue("focus");
-        float targetNotchFreq = *apvts.getRawParameterValue("roomNotchFreq");
-        float targetNotchQ = *apvts.getRawParameterValue("roomNotchQ");
-
-        double fc = targetNotchFreq + (1.0 - (double)knobFocus) * 50.0;
-        fc = juce::jlimit(100.0, 2000.0, fc);
-        double Q = targetNotchQ * (1.0 + (double)knobFocus * 1.5);
-        Q = juce::jlimit(0.5, 15.0, Q);
-
-        // CORRECTION VISUALISEUR : Atténuation (creux négatif) vers le bas
-        double maxAttenDB = -16.0 * (double)knobRoom;
-        maxAttenDB = juce::jlimit(-16.0, 0.0, maxAttenDB);
-
-        juce::Path responsePath;
-        bool firstPoint = true;
-        float w = static_cast<float>(getWidth());
-        float h = static_cast<float>(getHeight());
-
-        for (int pixelX = 0; pixelX < getWidth(); ++pixelX)
+        for (int px = 0; px < getWidth(); ++px)
         {
-            float t = static_cast<float>(pixelX) / w;
-            float freq = 100.0f * std::pow(2000.0f / 100.0f, t);
+            float freq = 100.0f * std::pow(2000.0f / 100.0f, (float)px / w);
+            int   bin  = juce::jlimit(0, 2047, (int)(freq * 2048.0f / sr));
 
-            float gainDB = 0.0f;
-            if (knobRoom > 0.001f)
-            {
-                float distance = std::abs(freq - static_cast<float>(fc));
-                float bandwidth = static_cast<float>(fc / Q);
-                if (distance < bandwidth * 2.0f)
-                {
-                    float normDist = distance / (bandwidth * 2.0f);
-                    gainDB = static_cast<float>(maxAttenDB) * (1.0f - std::tanh(normDist * 2.0f));
-                }
-            }
+            float magDB  = 20.0f * std::log10(displayMags[bin] / 2048.0f + 1e-7f);
+            float nrm    = juce::jlimit(0.0f, 1.0f, (magDB + 65.0f) / 50.0f);
 
-            // Placement vertical ajusté pour dessiner vers le bas
-            float pixelY = (h * 0.15f) + (gainDB / -16.0f) * (h * 0.7f);
-            pixelY = juce::jlimit(0.0f, h, pixelY);
-
-            if (firstPoint) {
-                responsePath.startNewSubPath(static_cast<float>(pixelX), pixelY);
-                firstPoint = false;
-            }
-            else {
-                responsePath.lineTo(static_cast<float>(pixelX), pixelY);
-            }
+            float hue = (1.0f - nrm) * 0.66f;         // rouge=0.0, bleu=0.66
+            float sat = (nrm > 0.05f) ? 0.88f : 0.0f; // gris si silence
+            float bri = 0.08f + nrm * 0.80f;          // très sombre → brillant
+            g.setColour(juce::Colour::fromHSV(hue, sat, bri, 1.0f));
+            g.fillRect(px, 0, 1, getHeight());
         }
 
-        // Dessin du trait fin bleu néon
-        g.setColour(juce::Colour(0xFF00E5FF));
-        g.strokePath(responsePath, juce::PathStrokeType(1.5f)); // Ligne fine élégante
+        // Grille discrète par-dessus la heatmap
+        g.setColour(juce::Colour(0x30FFFFFF));
+        for (float fx = 0.25f; fx < 1.0f; fx += 0.25f)
+            g.drawVerticalLine((int)(w * fx), 0.0f, h);
+        for (float fy = 0.25f; fy < 1.0f; fy += 0.25f)
+            g.drawHorizontalLine((int)(h * fy), 0.0f, w);
 
-        // Remplissage dégradé sous la courbe
-        g.setColour(juce::Colour(0x1500E5FF));
-        responsePath.lineTo(w, h);
-        responsePath.lineTo(0, h);
-        responsePath.closeSubPath();
-        g.fillPath(responsePath);
+        // === COURBE DU FILTRE NOTCH ===
+        auto& apvts  = processor.apvts;
+        float knobRoom  = *apvts.getRawParameterValue("room");
+        double fc       = juce::jlimit(100.0, 2000.0, (double)*apvts.getRawParameterValue("roomNotchFreq"));
+        double Q        = juce::jlimit(0.5, 15.0,    (double)*apvts.getRawParameterValue("roomNotchQ"));
+        double maxAtten = juce::jlimit(-16.0, 0.0, -16.0 * (double)knobRoom);
+
+        juce::Path curve;
+        bool first = true;
+        for (int px = 0; px < getWidth(); ++px)
+        {
+            float freq = 100.0f * std::pow(2000.0f / 100.0f, (float)px / w);
+            float gain = 0.0f;
+            if (knobRoom > 0.001f)
+            {
+                float dist = std::abs(freq - (float)fc);
+                float bw   = (float)(fc / Q);
+                if (dist < bw * 2.0f)
+                    gain = (float)maxAtten * (1.0f - std::tanh(dist / (bw * 2.0f) * 2.0f));
+            }
+            float py = juce::jlimit(0.0f, h, h * 0.15f + (gain / -16.0f) * (h * 0.70f));
+            if (first) { curve.startNewSubPath((float)px, py); first = false; }
+            else          curve.lineTo((float)px, py);
+        }
+
+        juce::Path fill = curve;
+        fill.lineTo(w, h); fill.lineTo(0.0f, h); fill.closeSubPath();
+        g.setColour(juce::Colour(0xFF00E5FF).withAlpha(0.10f));
+        g.fillPath(fill);
+
+        g.setColour(juce::Colour(0xFF00E5FF));
+        g.strokePath(curve, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         g.setColour(juce::Colour(0xFF3A4D5C));
         g.drawRect(getLocalBounds(), 1);
@@ -135,6 +147,7 @@ public:
 private:
     void timerCallback() override { repaint(); }
     InvisibleFixAudioProcessor& processor;
+    float displayMags[2048]{};
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RoomVisualizer)
 };
 
@@ -148,22 +161,16 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     setWantsKeyboardFocus(true);
     setVisible(true);
 
-    // --- CONFIGURATION DU SLIDER DE-ESS ---
-    deEssSlider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    deEssSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    applyModernKnobStyle(deEssSlider); // Applique ton style visuel moderne
-    addAndMakeVisible(deEssSlider);
-
-       // --- 0. ALLOCATION DU VISUALISEUR ---
-    roomVisualizer = new RoomVisualizer(audioProcessor);
-    addChildComponent(roomVisualizer);
+    // --- 0. ALLOCATION DU VISUALISEUR ---
+    roomVisualizer = std::make_unique<RoomVisualizer>(audioProcessor);
+    addChildComponent(roomVisualizer.get());
 
     // --- 1. CONFIGURATION DES POTENTIOMÈTRES FAÇADE PRINCIPALE ---
-    setupModernSlider(cleanSlider, "CLEAN");
-    setupModernSlider(roomSlider, "ROOM");
-    setupModernSlider(reverbSlider, "REVERB");
-    setupModernSlider(airSlider, "AIR");
-    setupModernSlider(focusSlider, "FOCUS");
+    setupModernSlider(cleanSlider,  "CLEAN");
+    setupModernSlider(roomSlider,   "ROOM");
+    setupModernSlider(reverbSlider, "DE-REV");
+    setupModernSlider(deEssSlider,  "DE-ESS");
+    setupModernSlider(airSlider,    "AIR");
 
     // Master Gain (juce::Slider direct)
     masterGainSlider.setSliderStyle(juce::Slider::SliderStyle::LinearHorizontal);
@@ -176,15 +183,44 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     masterGainLabel.setColour(juce::Label::textColourId, juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.4f));
     addAndMakeVisible(masterGainLabel);
 
+    // Descriptions légères sous les knobs façade
+    auto applyFacadeDesc = [](ModernSlider& ms, const juce::String& desc) {
+        ms.label.setText(desc, juce::dontSendNotification);
+        ms.label.setFont(juce::Font(juce::FontOptions(10.0f)));
+        ms.label.setJustificationType(juce::Justification::centred);
+        ms.label.setColour(juce::Label::textColourId, juce::Colour(0xFF2C3E50).withAlpha(0.60f));
+    };
+    applyFacadeDesc(cleanSlider,  "noise reduction & gate");
+    applyFacadeDesc(roomSlider,   "ROOM NOTCH");
+    applyFacadeDesc(reverbSlider, "reverb reducer");
+    applyFacadeDesc(deEssSlider,  "sibilance reducer");
+    applyFacadeDesc(airSlider,    "shelf & exciter");
+
     // --- 2. CONFIGURATION DES BOUTONS INTERACTIFS DISCRETS ---
     // CORRECTION DELTA : Encodage UTF-8 universel sécurisé via code hexadécimal
     deltaBtn.button.setButtonText(juce::String::fromUTF8("\xCE\x94"));
     deltaBtn.button.setClickingTogglesState(true);
-    deltaBtn.button.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+    deltaBtn.button.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
     deltaBtn.button.setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
-    deltaBtn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF2C3E50).withAlpha(0.3f));
-    deltaBtn.button.setColour(juce::TextButton::textColourOnId, juce::Colour(0xFF4A90E2));
+    deltaBtn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF2C3E50).withAlpha(0.28f));
+    deltaBtn.button.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF4A90E2));
+    deltaBtn.button.setLookAndFeel(&flatButtonLAF);
     addAndMakeVisible(deltaBtn.button);
+
+    auto setupDeltaBtn = [&](CustomButton& btn) {
+        btn.button.setButtonText(juce::String::fromUTF8("\xCE\x94"));
+        btn.button.setClickingTogglesState(true);
+        btn.button.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
+        btn.button.setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+        btn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF2C3E50).withAlpha(0.28f));
+        btn.button.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF4A90E2));
+        btn.button.setLookAndFeel(&flatButtonLAF);
+        addAndMakeVisible(btn.button);
+    };
+    setupDeltaBtn(roomDeltaBtn);
+    setupDeltaBtn(reverbDeltaBtn);
+    setupDeltaBtn(deEssDeltaBtn);
+    setupDeltaBtn(airDeltaBtn);
 
     // Bouton De-Ess Mode
     deEssModeBtn.button.setClickingTogglesState(true);
@@ -197,18 +233,48 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
         bool isBell = deEssModeBtn.button.getToggleState();
         deEssModeBtn.button.setButtonText(isBell ? "BELL" : "SHELF");
         };
-    deEssModeBtn.button.setButtonText("SHELF");
+    {
+        bool initialBell = *audioProcessor.apvts.getRawParameterValue("deEssFilterMode") > 0.5f;
+        deEssModeBtn.button.setButtonText(initialBell ? "BELL" : "SHELF");
+    }
     addAndMakeVisible(deEssModeBtn.button);
+
+    // Boutons Bypass (5 modules) — plats, sans bord visible
+    auto setupBypassBtn = [&](CustomButton& btn) {
+        btn.button.setClickingTogglesState(true);
+        btn.button.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
+        btn.button.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFE74C3C).withAlpha(0.12f));
+        btn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF2C3E50).withAlpha(0.45f));
+        btn.button.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFFE74C3C));
+        btn.button.setButtonText("BYP");
+        btn.button.setLookAndFeel(&flatButtonLAF);
+        addAndMakeVisible(btn.button);
+    };
+    setupBypassBtn(cleanBypassBtn);
+    setupBypassBtn(roomBypassBtn);
+    setupBypassBtn(reverbBypassBtn);
+    setupBypassBtn(deEssBypassBtn);
+    setupBypassBtn(airBypassBtn);
 
     // --- 3. CONFIGURATION DES TIROIRS AVANCÉS ---
     setupModernSlider(advRoomFreqSlider, "Notch Freq");
     setupModernSlider(advRoomQSlider, "Notch Q");
-    setupModernSlider(advDeEssIntenSlider, "De-Ess Intensity");
-    setupModernSlider(advDeEssFreqSlider, "De-Ess Freq");
-    setupModernSlider(advDeEssRelSlider, "De-Ess Release");
-    setupModernSlider(advGateFloorSlider, "Gate Floor");
-    setupModernSlider(advCleanRelSlider, "Gate Release");
-    setupModernSlider(advPlosiveSlider, "Plosive Ctrl");
+    setupModernSlider(advDeEssFreqSlider,    "De-Ess Freq");
+    setupModernSlider(advDeEssThreshSlider,  "Thresh dB");
+    setupModernSlider(advDeEssIntenSlider,   "Intensity");
+    setupModernSlider(advDeEssAtkSlider,     "Attack");
+    setupModernSlider(advDeEssRelSlider,     "Release");
+    setupModernSlider(advDeEssDetectSlider,  "Detect");
+    setupModernSlider(advGateFloorSlider,    "Gate Floor");
+    setupModernSlider(advCleanRelSlider,     "Gate Release");
+
+    // Gate advanced
+    setupModernSlider(advGateThresholdSlider, "Gate Thresh");
+    setupModernSlider(advGateAttackSlider,    "Gate Attack");
+    setupModernSlider(advGateHoldSlider,      "Gate Hold");
+
+    // Air drive
+    setupModernSlider(advAirDriveSlider, "Air Drive");
 
     // Curseur AIR FREQ (juce::Slider direct)
     advAirFreqSlider.setSliderStyle(juce::Slider::SliderStyle::LinearHorizontal);
@@ -235,41 +301,65 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
 
     // --- 4. ATTACHEMENTS APVTS ---
     cleanAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "clean", cleanSlider.slider);
-    deEssAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        audioProcessor.apvts, "deess", deEssSlider);
+    deEssAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deess", deEssSlider.slider);
     roomAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "room", roomSlider.slider);
     reverbAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "reverb", reverbSlider.slider);
-    focusAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "focus", focusSlider.slider);
     airAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "air", airSlider.slider);
 
     masterGainAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "outputGain", masterGainSlider);
 
+    // Bypass attachments
+    cleanBypassAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "cleanBypass", cleanBypassBtn.button);
+    roomBypassAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "roomBypass", roomBypassBtn.button);
+    reverbBypassAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "reverbBypass", reverbBypassBtn.button);
+    deEssBypassAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "deessBypass", deEssBypassBtn.button);
+    airBypassAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "airBypass", airBypassBtn.button);
+
+    // Delta attachments
     deltaAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "cleanDelta", deltaBtn.button);
-    deEssModeAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "cleanDeEssFilterMode", deEssModeBtn.button);
+    roomDeltaAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "roomDelta", roomDeltaBtn.button);
+    reverbDeltaAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "reverbDelta", reverbDeltaBtn.button);
+    deEssDeltaAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "deessDelta", deEssDeltaBtn.button);
+    airDeltaAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "airDelta", airDeltaBtn.button);
+
+    deEssModeAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "deEssFilterMode", deEssModeBtn.button);
 
     advRoomFreqAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "roomNotchFreq", advRoomFreqSlider.slider);
     advRoomQAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "roomNotchQ", advRoomQSlider.slider);
 
-    advDeEssIntenAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanDeEss", advDeEssIntenSlider.slider);
-    advDeEssFreqAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanDeEssFreq", advDeEssFreqSlider.slider);
-    advDeEssRelAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanDeEssRelease", advDeEssRelSlider.slider);
-    advGateFloorAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanGateFloor", advGateFloorSlider.slider);
-    advCleanRelAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanRelease", advCleanRelSlider.slider);
-    advPlosiveAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanPlosive", advPlosiveSlider.slider);
+    advDeEssFreqAttach    = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deEssFreq",       advDeEssFreqSlider.slider);
+    advDeEssThreshAttach  = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deEssThreshold",  advDeEssThreshSlider.slider);
+    advDeEssIntenAttach   = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deEssIntensity",  advDeEssIntenSlider.slider);
+    advDeEssAtkAttach     = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deEssAttack",     advDeEssAtkSlider.slider);
+    advDeEssRelAttach     = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deEssRelease",    advDeEssRelSlider.slider);
+    advDeEssDetectAttach  = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deEssDetectRatio", advDeEssDetectSlider.slider);
+    advGateFloorAttach    = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanGateFloor",  advGateFloorSlider.slider);
+    advCleanRelAttach     = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanRelease",    advCleanRelSlider.slider);
 
     advAirFreqAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "airFreq", advAirFreqSlider);
+
+    // Gate advanced attachments
+    advGateThresholdAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanGateThreshold", advGateThresholdSlider.slider);
+    advGateAttackAttach    = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanGateAttack",    advGateAttackSlider.slider);
+    advGateHoldAttach      = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanGateHold",      advGateHoldSlider.slider);
+
+    // Air drive
+    advAirDriveAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "airDrive", advAirDriveSlider.slider);
+
+    // NR — Noise Reduction
+    setupModernSlider(nrThreshSlider, "NR Thresh");
+    setupModernSlider(nrRatioSlider, "NR Ratio");
+    setupModernSlider(nrFloorSlider, "NR Floor");
+    setupModernSlider(nrSmoothSlider, "NR Smooth");
+    nrThreshAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrThreshold", nrThreshSlider.slider);
+    nrRatioAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrRatio", nrRatioSlider.slider);
+    nrFloorAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrFloor", nrFloorSlider.slider);
+    nrSmoothAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrSmooth", nrSmoothSlider.slider);
 
     setSize(680, 240);
 }
 
-InvisibleFixAudioProcessorEditor::~InvisibleFixAudioProcessorEditor()
-{
-    if (roomVisualizer != nullptr)
-    {
-        delete roomVisualizer;
-        roomVisualizer = nullptr;
-    }
-}
+InvisibleFixAudioProcessorEditor::~InvisibleFixAudioProcessorEditor() = default;
 
 // =============================================================================
 //  APPLICATION DU STYLE AUX SLIDERS
@@ -282,7 +372,10 @@ void InvisibleFixAudioProcessorEditor::applyModernKnobStyle(juce::Slider& slider
 void InvisibleFixAudioProcessorEditor::setupModernSlider(ModernSlider& modernSlider, const juce::String& name)
 {
     modernSlider.slider.setSliderStyle(juce::Slider::SliderStyle::RotaryHorizontalVerticalDrag);
-    modernSlider.slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    modernSlider.slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 55, 14);
+    modernSlider.slider.setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xFF2C3E50).withAlpha(0.70f));
+    modernSlider.slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+    modernSlider.slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 
     applyModernKnobStyle(modernSlider.slider);
     addAndMakeVisible(modernSlider.slider);
@@ -323,18 +416,22 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
             g.drawRoundedRectangle((float)x, (float)y, (float)w, (float)h, 6.0f, isSelected ? 1.5f : 1.0f);
 
             g.setColour(juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(isSelected ? 0.9f : 0.4f));
-            g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
-            g.drawText(title, x, y + 10, w, 18, juce::Justification::centred);
+            g.setFont(juce::Font(juce::FontOptions(11.0f).withStyle("Bold")));
+            g.drawText(title, x, y + 8, w, 20, juce::Justification::centred);
 
             g.setColour(isSelected ? juce::Colour((juce::uint8)74, (juce::uint8)144, (juce::uint8)226)
                 : juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.1f));
             g.fillEllipse((float)x + ((float)w / 2.0f) - 2.5f, (float)y + (float)h - 12.0f, 5.0f, 5.0f);
         };
 
-    drawModuleGroup(20, 50, 125, 170, "CLEAN & DE-ESS", currentTab == AdvancedTab::Clean);
-    drawModuleGroup(185, 50, 125, 170, "ROOM NOTCH", currentTab == AdvancedTab::Room);
-    drawModuleGroup(350, 50, 125, 170, "REVERB ABSORB", false);
-    drawModuleGroup(515, 50, 125, 170, "AIR ENHANCER", currentTab == AdvancedTab::Air);
+    // 5 modules identiques : 128px chacun, gap 6px, marges 8px → 680px exact
+    bool cleanTabActive = (currentTab == AdvancedTab::Clean);
+    bool deEssTabActive = (currentTab == AdvancedTab::DeEss);
+    drawModuleGroup(  8, 50, 128, 170, "CLEAN",        cleanTabActive);
+    drawModuleGroup(142, 50, 128, 170, "ROOM",          currentTab == AdvancedTab::Room);
+    drawModuleGroup(276, 50, 128, 170, "DE-REV",        false);
+    drawModuleGroup(410, 50, 128, 170, "DE-ESS",        deEssTabActive);
+    drawModuleGroup(544, 50, 128, 170, "AIR ENHANCER",  currentTab == AdvancedTab::Air);
 
     if (currentTab != AdvancedTab::None)
     {
@@ -347,6 +444,41 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
         g.setColour(juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.5f));
         g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
         g.drawText("ADVANCED CONFIGURATION", 20, 242, 200, 15, juce::Justification::centredLeft);
+
+        if (currentTab == AdvancedTab::Clean)
+        {
+            int advY = 280;
+
+            // Panneau NOISE REDUCTION (gauche)
+            g.setColour(juce::Colours::white.withAlpha(0.40f));
+            g.fillRoundedRectangle(14.0f, (float)(advY - 20), 248.0f, 78.0f, 5.0f);
+            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.07f));
+            g.drawRoundedRectangle(14.0f, (float)(advY - 20), 248.0f, 78.0f, 5.0f, 1.0f);
+
+            // Panneau GATE (droite)
+            g.setColour(juce::Colours::white.withAlpha(0.40f));
+            g.fillRoundedRectangle(318.0f, (float)(advY - 20), 352.0f, 78.0f, 5.0f);
+            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.07f));
+            g.drawRoundedRectangle(318.0f, (float)(advY - 20), 352.0f, 78.0f, 5.0f, 1.0f);
+
+            g.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
+            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.55f));
+            g.drawText("NOISE REDUCTION", 22,  advY - 15, 180, 12, juce::Justification::centredLeft);
+            g.drawText("GATE",            330, advY - 15, 80,  12, juce::Justification::centredLeft);
+        }
+        else if (currentTab == AdvancedTab::DeEss)
+        {
+            int advY = 280;
+            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.45f));
+            g.drawText("DE-ESSER", 50, advY - 16, 200, 13, juce::Justification::centredLeft);
+        }
+        else if (currentTab == AdvancedTab::Room)
+        {
+            int advY = 262;
+            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.45f));
+            g.drawText("NOTCH FREQ", 260, advY - 16, 66, 13, juce::Justification::centredLeft);
+            g.drawText("NOTCH Q",    326, advY - 16, 54, 13, juce::Justification::centredLeft);
+        }
     }
 }
 
@@ -355,99 +487,153 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
 // =============================================================================
 void InvisibleFixAudioProcessorEditor::resized()
 {
-    int sSize = 70;
-    int sY = 85;
-    int sLabelY = 175;
+    // Modules : x=[8,142,276,410,544], w=128 chacun, gap=6px, marges=8px → 680px
+    // Knob 90px (rotary 76px + textbox 14px), centré dans 128px → offset=19px
+    int sSize   = 90;
+    int sY      = 72;   // juste après les boutons (finissent à y=71)
+    int sLabelY = 172;  // description légère sous la textbox (qui finit à y=162)
 
-    // Modifie les coordonnées (X, Y, Largeur, Hauteur) selon ton design
-    deEssSlider.setBounds(90, sY + 2, 50, 50);
+    cleanSlider.slider.setBounds(  8+19, sY, sSize, sSize);
+    cleanSlider.label.setBounds(   8,   sLabelY, 128, 14);
+
+    roomSlider.slider.setBounds( 142+19, sY, sSize, sSize);
+    roomSlider.label.setBounds(  142,  sLabelY, 128, 14);
+
+    reverbSlider.slider.setBounds(276+19, sY, sSize, sSize);
+    reverbSlider.label.setBounds( 276, sLabelY, 128, 14);
+
+    deEssSlider.slider.setBounds( 410+19, sY, sSize, sSize);
+    deEssSlider.label.setBounds(  410, sLabelY, 128, 14);
+
+    airSlider.slider.setBounds(  544+19, sY, sSize, sSize);
+    airSlider.label.setBounds(   544, sLabelY, 128, 14);
+
+    // Bypass : coin sup-gauche de chaque module — même ligne que Delta (bY=53)
+    int bY = 53, bW = 28, bH = 18;
+    cleanBypassBtn.button.setBounds(   8+4, bY, bW, bH);
+    roomBypassBtn.button.setBounds(  142+4, bY, bW, bH);
+    reverbBypassBtn.button.setBounds(276+4, bY, bW, bH);
+    deEssBypassBtn.button.setBounds( 410+4, bY, bW, bH);
+    airBypassBtn.button.setBounds(   544+4, bY, bW, bH);
+
+    // Delta : coin sup-droit de chaque module — même ligne que Bypass
+    int dW = 24, dH = 18;
+    deltaBtn.button.setBounds(       8+128-dW-4, bY, dW, dH);
+    roomDeltaBtn.button.setBounds(  142+128-dW-4, bY, dW, dH);
+    reverbDeltaBtn.button.setBounds(276+128-dW-4, bY, dW, dH);
+    deEssDeltaBtn.button.setBounds( 410+128-dW-4, bY, dW, dH);
+    airDeltaBtn.button.setBounds(   544+128-dW-4, bY, dW, dH);
 
     masterGainLabel.setBounds(getWidth() - 195, 0, 75, 35);
     masterGainSlider.setBounds(getWidth() - 115, 8, 100, 20);
-
-    cleanSlider.slider.setBounds(35, sY, 55, 55);
-    cleanSlider.label.setBounds(35, sLabelY, 55, 15);
-
-    deltaBtn.button.setBounds(70, 62, 14, 14);
-
-    roomSlider.slider.setBounds(192, sY, 52, 52);
-    roomSlider.label.setBounds(192, sLabelY - 14, 52, 14);
-
-    focusSlider.slider.setBounds(247, sY + 12, 45, 45);
-    focusSlider.label.setBounds(247, sLabelY, 45, 14);
-
-    reverbSlider.slider.setBounds(377, sY, sSize, sSize);
-    reverbSlider.label.setBounds(377, sLabelY, sSize, 15);
-
-    airSlider.slider.setBounds(542, sY, sSize, sSize);
-    airSlider.label.setBounds(542, sLabelY, sSize, 15);
 
     if (roomVisualizer != nullptr)
         roomVisualizer->setVisible(false);
 
     advRoomFreqSlider.slider.setVisible(false);   advRoomFreqSlider.label.setVisible(false);
     advRoomQSlider.slider.setVisible(false);      advRoomQSlider.label.setVisible(false);
-    advDeEssIntenSlider.slider.setVisible(false); advDeEssIntenSlider.label.setVisible(false);
-    advDeEssFreqSlider.slider.setVisible(false);  advDeEssFreqSlider.label.setVisible(false);
-    advDeEssRelSlider.slider.setVisible(false);   advDeEssRelSlider.label.setVisible(false);
-    advGateFloorSlider.slider.setVisible(false);  advGateFloorSlider.label.setVisible(false);
-    advCleanRelSlider.slider.setVisible(false);   advCleanRelSlider.label.setVisible(false);
-    advPlosiveSlider.slider.setVisible(false);    advPlosiveSlider.label.setVisible(false);
+    advDeEssFreqSlider.slider.setVisible(false);    advDeEssFreqSlider.label.setVisible(false);
+    advDeEssThreshSlider.slider.setVisible(false);  advDeEssThreshSlider.label.setVisible(false);
+    advDeEssIntenSlider.slider.setVisible(false);   advDeEssIntenSlider.label.setVisible(false);
+    advDeEssAtkSlider.slider.setVisible(false);     advDeEssAtkSlider.label.setVisible(false);
+    advDeEssRelSlider.slider.setVisible(false);     advDeEssRelSlider.label.setVisible(false);
+    advDeEssDetectSlider.slider.setVisible(false);  advDeEssDetectSlider.label.setVisible(false);
+    advGateFloorSlider.slider.setVisible(false);    advGateFloorSlider.label.setVisible(false);
+    advCleanRelSlider.slider.setVisible(false);     advCleanRelSlider.label.setVisible(false);
     deEssModeBtn.button.setVisible(false);
+
     advAirFreqSlider.setVisible(false);
     airCharacterLabel.setVisible(false);
+    advGateThresholdSlider.slider.setVisible(false); advGateThresholdSlider.label.setVisible(false);
+    advGateAttackSlider.slider.setVisible(false);    advGateAttackSlider.label.setVisible(false);
+    advGateHoldSlider.slider.setVisible(false);      advGateHoldSlider.label.setVisible(false);
+    advAirDriveSlider.slider.setVisible(false);      advAirDriveSlider.label.setVisible(false);
+    nrThreshSlider.slider.setVisible(false);  nrThreshSlider.label.setVisible(false);
+    nrRatioSlider.slider.setVisible(false);   nrRatioSlider.label.setVisible(false);
+    nrFloorSlider.slider.setVisible(false);   nrFloorSlider.label.setVisible(false);
+    nrSmoothSlider.slider.setVisible(false);  nrSmoothSlider.label.setVisible(false);
 
-    int advY = 262;
+    int advY = 280;
     int advS = 54;
 
     if (currentTab == AdvancedTab::Room)
     {
+        int advY = 262; // le visualiseur est plus haut pour tenir dans 360px
         if (roomVisualizer != nullptr) {
-            addAndMakeVisible(roomVisualizer);
+            addAndMakeVisible(roomVisualizer.get());
             roomVisualizer->setVisible(true);
-            roomVisualizer->setBounds(25, advY, 150, 65);
+            roomVisualizer->setBounds(20, advY, 210, 80);
         }
 
         advRoomFreqSlider.slider.setVisible(true); advRoomFreqSlider.label.setVisible(true);
         advRoomQSlider.slider.setVisible(true);    advRoomQSlider.label.setVisible(true);
-
-        advRoomFreqSlider.slider.setBounds(195, advY, advS, advS);
-        advRoomFreqSlider.label.setBounds(195, advY + 54, advS, 14);
-        advRoomQSlider.slider.setBounds(265, advY, advS, advS);
-        advRoomQSlider.label.setBounds(265, advY + 54, advS, 14);
+        advRoomFreqSlider.slider.setBounds(260, advY, advS, advS);
+        advRoomFreqSlider.label.setBounds(260, advY + 54, advS, 14);
+        advRoomQSlider.slider.setBounds(326, advY, advS, advS);
+        advRoomQSlider.label.setBounds(326, advY + 54, advS, 14);
     }
     else if (currentTab == AdvancedTab::Clean)
     {
-        advDeEssIntenSlider.slider.setVisible(true); advDeEssIntenSlider.label.setVisible(true);
-        advDeEssFreqSlider.slider.setVisible(true);  advDeEssFreqSlider.label.setVisible(true);
-        advDeEssRelSlider.slider.setVisible(true);   advDeEssRelSlider.label.setVisible(true);
-        advGateFloorSlider.slider.setVisible(true);  advGateFloorSlider.label.setVisible(true);
-        advCleanRelSlider.slider.setVisible(true);   advCleanRelSlider.label.setVisible(true);
-        advPlosiveSlider.slider.setVisible(true);    advPlosiveSlider.label.setVisible(true);
+        // --- NR (gauche) + GATE (droite) sur la même ligne ---
+        int gS = 50;
+
+        // NR — 4 knobs à gauche
+        nrThreshSlider.slider.setVisible(true);  nrThreshSlider.label.setVisible(true);
+        nrRatioSlider.slider.setVisible(true);   nrRatioSlider.label.setVisible(true);
+        nrFloorSlider.slider.setVisible(true);   nrFloorSlider.label.setVisible(true);
+        nrSmoothSlider.slider.setVisible(true);  nrSmoothSlider.label.setVisible(true);
+
+        nrThreshSlider.slider.setBounds(22,  advY, gS, gS); nrThreshSlider.label.setBounds(22,  advY + gS, gS, 14);
+        nrRatioSlider.slider.setBounds(78,   advY, gS, gS); nrRatioSlider.label.setBounds(78,   advY + gS, gS, 14);
+        nrFloorSlider.slider.setBounds(134,  advY, gS, gS); nrFloorSlider.label.setBounds(134,  advY + gS, gS, 14);
+        nrSmoothSlider.slider.setBounds(190, advY, gS, gS); nrSmoothSlider.label.setBounds(190, advY + gS, gS, 14);
+
+        // GATE — 5 knobs à droite
+        advGateThresholdSlider.slider.setVisible(true); advGateThresholdSlider.label.setVisible(true);
+        advGateAttackSlider.slider.setVisible(true);    advGateAttackSlider.label.setVisible(true);
+        advGateHoldSlider.slider.setVisible(true);      advGateHoldSlider.label.setVisible(true);
+        advGateFloorSlider.slider.setVisible(true);     advGateFloorSlider.label.setVisible(true);
+        advCleanRelSlider.slider.setVisible(true);      advCleanRelSlider.label.setVisible(true);
+
+        advGateThresholdSlider.slider.setBounds(330, advY, gS, gS); advGateThresholdSlider.label.setBounds(330, advY + gS, gS, 14);
+        advGateAttackSlider.slider.setBounds(386,    advY, gS, gS); advGateAttackSlider.label.setBounds(386,    advY + gS, gS, 14);
+        advGateHoldSlider.slider.setBounds(442,      advY, gS, gS); advGateHoldSlider.label.setBounds(442,      advY + gS, gS, 14);
+        advGateFloorSlider.slider.setBounds(498,     advY, gS, gS); advGateFloorSlider.label.setBounds(498,     advY + gS, gS, 14);
+        advCleanRelSlider.slider.setBounds(554,      advY, gS, gS); advCleanRelSlider.label.setBounds(554,      advY + gS, gS, 14);
+    }
+    else if (currentTab == AdvancedTab::DeEss)
+    {
+        advDeEssFreqSlider.slider.setVisible(true);   advDeEssFreqSlider.label.setVisible(true);
+        advDeEssThreshSlider.slider.setVisible(true); advDeEssThreshSlider.label.setVisible(true);
+        advDeEssIntenSlider.slider.setVisible(true);  advDeEssIntenSlider.label.setVisible(true);
+        advDeEssAtkSlider.slider.setVisible(true);    advDeEssAtkSlider.label.setVisible(true);
+        advDeEssRelSlider.slider.setVisible(true);    advDeEssRelSlider.label.setVisible(true);
         deEssModeBtn.button.setVisible(true);
+        advDeEssDetectSlider.slider.setVisible(true); advDeEssDetectSlider.label.setVisible(true);
 
-        advDeEssIntenSlider.slider.setBounds(35, advY, advS, advS);
-        advDeEssIntenSlider.label.setBounds(35, advY + 54, advS, 14);
-        advDeEssFreqSlider.slider.setBounds(100, advY, advS, advS);
-        advDeEssFreqSlider.label.setBounds(100, advY + 54, advS, 14);
-
-        deEssModeBtn.button.setBounds(165, advY + 16, 60, 22);
-
-        advDeEssRelSlider.slider.setBounds(240, advY, advS, advS);
-        advDeEssRelSlider.label.setBounds(240, advY + 54, advS, 14);
-        advGateFloorSlider.slider.setBounds(305, advY, advS, advS);
-        advGateFloorSlider.label.setBounds(305, advY + 54, advS, 14);
-        advCleanRelSlider.slider.setBounds(370, advY, advS, advS);
-        advCleanRelSlider.label.setBounds(370, advY + 54, advS, 14);
-        advPlosiveSlider.slider.setBounds(435, advY, advS, advS);
-        advPlosiveSlider.label.setBounds(435, advY + 54, advS, 14);
+        advDeEssFreqSlider.slider.setBounds(50,   advY, advS, advS);
+        advDeEssFreqSlider.label.setBounds(50,    advY + 54, advS, 14);
+        advDeEssThreshSlider.slider.setBounds(115, advY, advS, advS);
+        advDeEssThreshSlider.label.setBounds(115,  advY + 54, advS, 14);
+        advDeEssIntenSlider.slider.setBounds(180, advY, advS, advS);
+        advDeEssIntenSlider.label.setBounds(180,  advY + 54, advS, 14);
+        advDeEssAtkSlider.slider.setBounds(245,   advY, advS, advS);
+        advDeEssAtkSlider.label.setBounds(245,    advY + 54, advS, 14);
+        advDeEssRelSlider.slider.setBounds(310,   advY, advS, advS);
+        advDeEssRelSlider.label.setBounds(310,    advY + 54, advS, 14);
+        deEssModeBtn.button.setBounds(375, advY + 16, 55, 22);
+        advDeEssDetectSlider.slider.setBounds(445, advY, advS, advS);
+        advDeEssDetectSlider.label.setBounds(445,  advY + 54, advS, 14);
     }
     else if (currentTab == AdvancedTab::Air)
     {
         advAirFreqSlider.setVisible(true);
+        advAirDriveSlider.slider.setVisible(true); advAirDriveSlider.label.setVisible(true);
         airCharacterLabel.setVisible(true);
         advAirFreqSlider.setBounds(40, advY + 15, 360, 25);
-        airCharacterLabel.setBounds(420, advY + 15, 220, 25);
+        advAirDriveSlider.slider.setBounds(420, advY - 5, 60, 60);
+        advAirDriveSlider.label.setBounds(420, advY + 55, 60, 14);
+        airCharacterLabel.setBounds(490, advY + 15, 180, 25);
     }
 }
 
@@ -456,17 +642,19 @@ void InvisibleFixAudioProcessorEditor::mouseUp(const juce::MouseEvent& event)
     juce::Point<int> clickPos = event.getPosition();
     AdvancedTab clickedTab = AdvancedTab::None;
 
-    if (juce::Rectangle<int>(20, 50, 125, 170).contains(clickPos))       clickedTab = AdvancedTab::Clean;
-    else if (juce::Rectangle<int>(185, 50, 125, 170).contains(clickPos)) clickedTab = AdvancedTab::Room;
-    else if (juce::Rectangle<int>(515, 50, 125, 170).contains(clickPos)) clickedTab = AdvancedTab::Air;
+    if      (juce::Rectangle<int>(  8, 50, 128, 170).contains(clickPos)) clickedTab = AdvancedTab::Clean;
+    else if (juce::Rectangle<int>(142, 50, 128, 170).contains(clickPos)) clickedTab = AdvancedTab::Room;
+    else if (juce::Rectangle<int>(410, 50, 128, 170).contains(clickPos)) clickedTab = AdvancedTab::DeEss;
+    else if (juce::Rectangle<int>(544, 50, 128, 170).contains(clickPos)) clickedTab = AdvancedTab::Air;
 
     if (clickedTab != AdvancedTab::None)
     {
         if (currentTab == clickedTab) currentTab = AdvancedTab::None;
         else                          currentTab = clickedTab;
 
-        if (currentTab == AdvancedTab::None) setSize(680, 240);
-        else                                 setSize(680, 355);
+        if      (currentTab == AdvancedTab::None)  setSize(680, 240);
+        else if (currentTab == AdvancedTab::Clean)  setSize(680, 360);
+        else                                        setSize(680, 360);
 
         resized();
         repaint();

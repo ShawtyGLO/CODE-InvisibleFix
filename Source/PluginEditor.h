@@ -32,24 +32,34 @@ private:
     InvisibleFixAudioProcessor& audioProcessor;
 
     // Visualiseur graphique
-    juce::Component* roomVisualizer{ nullptr };
+    std::unique_ptr<juce::Component> roomVisualizer;
 
-    enum class AdvancedTab { None, Clean, Room, Air };
+    enum class AdvancedTab { None, Clean, Room, Air, DeEss };
     AdvancedTab currentTab = AdvancedTab::None;
 
     // Façade principale
-    ModernSlider cleanSlider, roomSlider, reverbSlider, airSlider, focusSlider;
-    juce::Slider deEssSlider;       // <--- Placé ici de manière propre (juce::Slider brut)
+    ModernSlider cleanSlider, deEssSlider, roomSlider, reverbSlider, airSlider;
     juce::Slider masterGainSlider;
     juce::Label masterGainLabel;
 
-    CustomButton deltaBtn;
+    // Boutons Bypass
+    CustomButton cleanBypassBtn, roomBypassBtn, reverbBypassBtn, deEssBypassBtn, airBypassBtn;
+    // Boutons Delta
+    CustomButton deltaBtn, roomDeltaBtn, reverbDeltaBtn, deEssDeltaBtn, airDeltaBtn;
+
     CustomButton deEssModeBtn;
 
     // Configuration avancée (Tiroirs)
     ModernSlider advRoomFreqSlider, advRoomQSlider;
-    ModernSlider advDeEssIntenSlider, advDeEssFreqSlider, advDeEssRelSlider;
-    ModernSlider advGateFloorSlider, advCleanRelSlider, advPlosiveSlider;
+    ModernSlider advDeEssFreqSlider, advDeEssThreshSlider, advDeEssIntenSlider;
+    ModernSlider advDeEssAtkSlider, advDeEssRelSlider, advDeEssDetectSlider;
+    ModernSlider advGateFloorSlider, advCleanRelSlider;
+
+    // Gate advanced
+    ModernSlider advGateThresholdSlider, advGateAttackSlider, advGateHoldSlider;
+    // Air drive
+    ModernSlider advAirDriveSlider;
+
 
     // Le curseur AIR FREQ est isolé pour garder son comportement horizontal linéaire personnalisé
     juce::Slider advAirFreqSlider;
@@ -60,12 +70,21 @@ private:
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
     // Liste des attachements APVTS
-    std::unique_ptr<SliderAttachment> cleanAttach, deEssAttach, roomAttach, reverbAttach, airAttach, focusAttach, masterGainAttach;
-    std::unique_ptr<ButtonAttachment> deltaAttach, deEssModeAttach;
+    std::unique_ptr<SliderAttachment> cleanAttach, deEssAttach, roomAttach, reverbAttach, airAttach, masterGainAttach;
+    std::unique_ptr<ButtonAttachment> cleanBypassAttach, roomBypassAttach, reverbBypassAttach, deEssBypassAttach, airBypassAttach;
+    std::unique_ptr<ButtonAttachment> deltaAttach, roomDeltaAttach, reverbDeltaAttach, deEssDeltaAttach, airDeltaAttach;
+    std::unique_ptr<ButtonAttachment> deEssModeAttach;
     std::unique_ptr<SliderAttachment> advRoomFreqAttach, advRoomQAttach;
-    std::unique_ptr<SliderAttachment> advDeEssIntenAttach, advDeEssFreqAttach, advDeEssRelAttach;
-    std::unique_ptr<SliderAttachment> advGateFloorAttach, advCleanRelAttach, advPlosiveAttach;
+    std::unique_ptr<SliderAttachment> advDeEssFreqAttach, advDeEssThreshAttach, advDeEssIntenAttach;
+    std::unique_ptr<SliderAttachment> advDeEssAtkAttach, advDeEssRelAttach, advDeEssDetectAttach;
+    std::unique_ptr<SliderAttachment> advGateFloorAttach, advCleanRelAttach;
     std::unique_ptr<SliderAttachment> advAirFreqAttach;
+    std::unique_ptr<SliderAttachment> advGateThresholdAttach, advGateAttackAttach, advGateHoldAttach;
+    std::unique_ptr<SliderAttachment> advAirDriveAttach;
+    std::unique_ptr<SliderAttachment> nrThreshAttach, nrRatioAttach, nrFloorAttach, nrSmoothAttach;
+
+    // NR — Noise Reduction
+    ModernSlider nrThreshSlider, nrRatioSlider, nrFloorSlider, nrSmoothSlider;
 
     // Fonctions utilitaires de design
     void setupModernSlider(ModernSlider& modernSlider, const juce::String& name);
