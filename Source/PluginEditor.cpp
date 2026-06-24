@@ -2,46 +2,84 @@
 #include "PluginEditor.h"
 
 // =============================================================================
-//  STYLE DE DESSIN UNIQUE POUR LES SLIDERS MODERNES (Extrait pour stabilité C++)
+//  ARC FIN — LookAndFeel pour knobs (grand façade 94px + petit avancé 50px)
+//  Arc 270° de 135° à 45° (sens horaire depuis 12h), dégradé cyan→teal
 // =============================================================================
-class ModernSliderLookAndFeel : public juce::LookAndFeel_V4
+class ArcFinLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
-    ModernSliderLookAndFeel() = default;
-
     void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
-        float sliderPos, const float rotaryStartAngle, const float rotaryEndAngle,
-        juce::Slider& s) override
+        float sliderPos, float startAngle, float endAngle, juce::Slider&) override
     {
-        auto radius = (float)juce::jmin(width / 2, height / 2) - 6.0f;
-        auto centreX = (float)x + (float)width * 0.5f;
-        auto centreY = (float)y + (float)height * 0.5f;
-        auto rx = centreX - radius;
-        auto ry = centreY - radius;
-        auto rw = radius * 2.0f;
-        auto angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
+        bool   isLarge   = (width >= 70);
+        float  arcThick  = isLarge ? 5.5f : 4.0f;
+        float  inset     = isLarge ? 8.0f : 5.0f;
 
-        // 1. Fond de l'anneau (Gris très clair, très fin)
-        g.setColour(juce::Colour(0xFFE4EAEB));
-        g.drawEllipse(rx, ry, rw, rw, 1.5f);
+        float  cx  = (float)x + (float)width  * 0.5f;
+        float  cy  = (float)y + (float)height * 0.5f;
+        float  outerR = (float)juce::jmin(width, height) * 0.5f;
+        float  arcR   = outerR - arcThick * 0.5f;
 
-        // 2. Arc de valeur actif (Bleu moderne fin et élégant)
-        juce::Path p;
-        p.addCentredArc(centreX, centreY, radius, radius, 0.0f, rotaryStartAngle, angle, true);
-        g.setColour(juce::Colour(0xFF4A90E2));
-        g.strokePath(p, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        float  valAngle = startAngle + sliderPos * (endAngle - startAngle);
 
-        // 3. Petit pointeur rotatif discret sur l'arc
-        g.setColour(juce::Colour(0xFF2C3E50));
-        float pointerRadius = 3.0f;
-        float px = centreX + radius * std::sin(angle);
-        float py = centreY - radius * std::cos(angle);
-        g.fillEllipse(px - pointerRadius, py - pointerRadius, pointerRadius * 2.0f, pointerRadius * 2.0f);
+        // ── 1. Track arc (gris clair, plein 270°) ──────────────────────────
+        juce::Path track;
+        track.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAngle, endAngle, true);
+        g.setColour(juce::Colour(0xFFcdddd9));
+        g.strokePath(track, juce::PathStrokeType(arcThick,
+            juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        // ── 2. Arc rempli (gradient cyan→teal jusqu'à la valeur) ────────────
+        if (sliderPos > 0.005f)
+        {
+            juce::Path filled;
+            filled.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAngle, valAngle, true);
+            juce::ColourGradient grad(
+                juce::Colour(0xFF13add6), cx - arcR, cy,
+                juce::Colour(0xFF1bb89e), cx + arcR, cy + arcR,
+                false);
+            g.setGradientFill(grad);
+            g.strokePath(filled, juce::PathStrokeType(arcThick,
+                juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+
+        // ── 3. Cercle central (fond verre + ring) ───────────────────────────
+        float inR = outerR - inset;
+        g.setColour(juce::Colours::white.withAlpha(0.45f));
+        g.fillEllipse(cx - inR, cy - inR, inR * 2.0f, inR * 2.0f);
+        g.setColour(juce::Colour(0xFF16b3bf).withAlpha(0.20f));
+        g.drawEllipse(cx - inR + 0.75f, cy - inR + 0.75f,
+                      (inR - 0.75f) * 2.0f, (inR - 0.75f) * 2.0f, 1.0f);
+
+        // ── 4. Aiguille (rectangle arrondi gradient cyan→teal) ─────────────
+        float needleW  = isLarge ? 3.0f  : 2.5f;
+        float needleH  = isLarge ? 10.0f : 8.0f;
+        float needleTopY = isLarge ? 6.0f  : 4.0f;  // depuis le haut du cercle interne
+
+        // Dessin avant rotation : aiguille pointant vers 12h (y négatif = haut)
+        float needleTopFromCenter = -(inR - needleTopY);
+        juce::Path needle;
+        needle.addRoundedRectangle(-needleW * 0.5f, needleTopFromCenter,
+                                    needleW, needleH, 1.0f);
+        needle.applyTransform(
+            juce::AffineTransform::rotation(valAngle).translated(cx, cy));
+
+        juce::ColourGradient ng(
+            juce::Colour(0xFF13add6), cx, cy - inR,
+            juce::Colour(0xFF1bb89e), cx, cy - inR + needleH,
+            false);
+        g.setGradientFill(ng);
+        g.fillPath(needle);
+    }
+
+    juce::Font getLabelFont(juce::Label& lbl) override
+    {
+        // Valeur numérique dans la textbox → léger
+        return juce::Font(juce::FontOptions(lbl.getHeight() > 12 ? 13.0f : 10.0f));
     }
 };
 
-// Instance globale statique partagée proprement
-static ModernSliderLookAndFeel modernSliderLookAndFeelInstance;
+static ArcFinLookAndFeel arcFinLAF;
 
 // =============================================================================
 //  BOUTONS PLATS — aucun bord visible, fond transparent sauf état actif
@@ -178,17 +216,25 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     addAndMakeVisible(masterGainSlider);
 
     masterGainLabel.setText("MASTER GAIN", juce::dontSendNotification);
-    masterGainLabel.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+    masterGainLabel.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
     masterGainLabel.setJustificationType(juce::Justification::centredRight);
-    masterGainLabel.setColour(juce::Label::textColourId, juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.4f));
+    masterGainLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF26332f));
     addAndMakeVisible(masterGainLabel);
+
+    // Master gain slider : Arc Fin horizontal style
+    masterGainSlider.setColour(juce::Slider::thumbColourId,       juce::Colour(0xFF16b3bf));
+    masterGainSlider.setColour(juce::Slider::trackColourId,       juce::Colour(0xFFcdddd9));
+    masterGainSlider.setColour(juce::Slider::backgroundColourId,  juce::Colour(0xFFcdddd9));
+    masterGainSlider.setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xFF94a5a2));
+    masterGainSlider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xB3FFFFFF));
+    masterGainSlider.setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xB3C8DCDC));
 
     // Descriptions légères sous les knobs façade
     auto applyFacadeDesc = [](ModernSlider& ms, const juce::String& desc) {
         ms.label.setText(desc, juce::dontSendNotification);
-        ms.label.setFont(juce::Font(juce::FontOptions(10.0f)));
+        ms.label.setFont(juce::Font(juce::FontOptions(9.0f)));
         ms.label.setJustificationType(juce::Justification::centred);
-        ms.label.setColour(juce::Label::textColourId, juce::Colour(0xFF2C3E50).withAlpha(0.60f));
+        ms.label.setColour(juce::Label::textColourId, juce::Colour(0xFF94a5a2));
     };
     applyFacadeDesc(cleanSlider,  "noise reduction & gate");
     applyFacadeDesc(roomSlider,   "ROOM NOTCH");
@@ -202,8 +248,8 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     deltaBtn.button.setClickingTogglesState(true);
     deltaBtn.button.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
     deltaBtn.button.setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
-    deltaBtn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF2C3E50).withAlpha(0.28f));
-    deltaBtn.button.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF4A90E2));
+    deltaBtn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF94a5a2));
+    deltaBtn.button.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF13add6));
     deltaBtn.button.setLookAndFeel(&flatButtonLAF);
     addAndMakeVisible(deltaBtn.button);
 
@@ -212,8 +258,8 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
         btn.button.setClickingTogglesState(true);
         btn.button.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
         btn.button.setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
-        btn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF2C3E50).withAlpha(0.28f));
-        btn.button.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF4A90E2));
+        btn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF94a5a2));
+        btn.button.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF13add6));
         btn.button.setLookAndFeel(&flatButtonLAF);
         addAndMakeVisible(btn.button);
     };
@@ -243,9 +289,9 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     auto setupBypassBtn = [&](CustomButton& btn) {
         btn.button.setClickingTogglesState(true);
         btn.button.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
-        btn.button.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFE74C3C).withAlpha(0.12f));
-        btn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF2C3E50).withAlpha(0.45f));
-        btn.button.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFFE74C3C));
+        btn.button.setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+        btn.button.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF94a5a2));
+        btn.button.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFFcdddd9));
         btn.button.setButtonText("BYP");
         btn.button.setLookAndFeel(&flatButtonLAF);
         addAndMakeVisible(btn.button);
@@ -356,7 +402,11 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     nrFloorAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrFloor", nrFloorSlider.slider);
     nrSmoothAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrSmooth", nrSmoothSlider.slider);
 
-    setSize(680, 240);
+    // Façade knobs: textbox 94px large, 20px tall (Arc Fin value display)
+    for (auto* ms : { &cleanSlider, &roomSlider, &reverbSlider, &deEssSlider, &airSlider })
+        ms->slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 94, 20);
+
+    setSize(760, 290);
 }
 
 InvisibleFixAudioProcessorEditor::~InvisibleFixAudioProcessorEditor() = default;
@@ -366,274 +416,316 @@ InvisibleFixAudioProcessorEditor::~InvisibleFixAudioProcessorEditor() = default;
 // =============================================================================
 void InvisibleFixAudioProcessorEditor::applyModernKnobStyle(juce::Slider& slider)
 {
-    slider.setLookAndFeel(&modernSliderLookAndFeelInstance);
+    slider.setLookAndFeel(&arcFinLAF);
+    // Arc Fin : 270° de 225° (bas-gauche) à 135° (bas-droit), sens horaire
+    // Le conic CSS démarre à 135°+90° = 225° (zone morte = 90° après "from 135deg")
+    slider.setRotaryParameters(1.25f * juce::MathConstants<float>::pi,
+                               2.75f * juce::MathConstants<float>::pi, true);
 }
 
 void InvisibleFixAudioProcessorEditor::setupModernSlider(ModernSlider& modernSlider, const juce::String& name)
 {
+    // Taille textbox par défaut pour les knobs avancés (50px)
     modernSlider.slider.setSliderStyle(juce::Slider::SliderStyle::RotaryHorizontalVerticalDrag);
-    modernSlider.slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 55, 14);
-    modernSlider.slider.setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xFF2C3E50).withAlpha(0.70f));
+    modernSlider.slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 16);
+    modernSlider.slider.setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xFF26332f));
     modernSlider.slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
     modernSlider.slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    modernSlider.slider.setColour(juce::Slider::textBoxHighlightColourId, juce::Colour(0xFF13add6).withAlpha(0.25f));
 
     applyModernKnobStyle(modernSlider.slider);
     addAndMakeVisible(modernSlider.slider);
 
+    // Libellé paramètre (sous la valeur) — Arc Fin: 8px, couleur muted
     modernSlider.label.setText(name, juce::dontSendNotification);
-    modernSlider.label.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
+    modernSlider.label.setFont(juce::Font(juce::FontOptions(8.0f)));
     modernSlider.label.setJustificationType(juce::Justification::centred);
-    modernSlider.label.setColour(juce::Label::textColourId, juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.4f));
+    modernSlider.label.setColour(juce::Label::textColourId, juce::Colour(0xFF94a5a2));
     addAndMakeVisible(modernSlider.label);
 }
 
 // =============================================================================
-//  DESSIN GRAPHIQUE DES PANELS
+//  DESSIN GRAPHIQUE — ARC FIN
 // =============================================================================
 void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour((juce::uint8)235, (juce::uint8)240, (juce::uint8)242));
+    int W = getWidth(), H = getHeight();
 
-    g.setColour(juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.1f));
-    g.drawHorizontalLine(35, 0.0f, (float)getWidth());
+    // ── Fond dégradé 145° ebf4f7 → e4f0ee → ddeaf0 ──────────────────────────
+    {
+        juce::ColourGradient bg(juce::Colour(0xFFebf4f7), 0.0f, 0.0f,
+                                juce::Colour(0xFFddeaf0), (float)W, (float)H, false);
+        bg.addColour(0.55, juce::Colour(0xFFe4f0ee));
+        g.setGradientFill(bg);
+        g.fillRoundedRectangle(0, 0, W, H, 9.0f);
+    }
 
-    g.setColour(juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80));
-    g.setFont(juce::Font(juce::FontOptions(14.0f).withStyle("Bold")));
-    g.drawText("INVISIBLE FIX", 20, 0, 150, 35, juce::Justification::centredLeft);
+    // ── Bordure extérieure glass ─────────────────────────────────────────────
+    g.setColour(juce::Colours::white.withAlpha(0.65f));
+    g.drawRoundedRectangle(0.5f, 0.5f, (float)W-1, (float)H-1, 9.0f, 1.0f);
 
-    // TEXTE VERSION CORRIGÉ : Sans aucun caractère instable pour le compilateur
+    // ── Header ───────────────────────────────────────────────────────────────
+    // Wordmark gauche : INVISIBLE ● FIX
+    int hY = 12, hH = 28;
+    g.setFont(juce::Font(juce::FontOptions(17.0f)));
+    g.setColour(juce::Colour(0xFF26332f));
+    g.drawText("INVISIBLE", 22, hY, 95, hH, juce::Justification::centredLeft);
+
+    // point cyan lumineux
+    float dotX = 121.0f, dotY = hY + hH * 0.5f - 3.0f;
+    g.setColour(juce::Colour(0xFF13add6));
+    g.fillEllipse(dotX, dotY, 6.0f, 6.0f);
+
+    g.setFont(juce::Font(juce::FontOptions(17.0f)));
+    g.setColour(juce::Colour(0xFF1bb89e));
+    g.drawText("FIX", 134, hY, 40, hH, juce::Justification::centredLeft);
+
+    // Version — droite du header
     g.setFont(juce::Font(juce::FontOptions(9.0f)));
-    g.setColour(juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.4f));
-    g.drawText("V0.8 - LAB STUDIO", getWidth() - 310, 0, 110, 35, juce::Justification::centredRight);
+    g.setColour(juce::Colour(0xFF94a5a2));
+    g.drawText("V0.8  LAB STUDIO", W - 345, hY, 110, hH, juce::Justification::centredRight);
 
-    auto drawModuleGroup = [&](int x, int y, int w, int h, const juce::String& title, bool isSelected)
+    // ── Cartes modules ───────────────────────────────────────────────────────
+    // x positions : [24,168,312,456,600], w=136, y=58, h=200
+    const int modX[5]   = { 24, 168, 312, 456, 600 };
+    const int modW = 136, modY = 58, modH = 200;
+    const char* modNames[5] = { "CLEAN", "ROOM", "DE-REV", "DE-ESS", "AIR ENHANCER" };
+
+    AdvancedTab tabForMod[5] = {
+        AdvancedTab::Clean, AdvancedTab::Room,
+        AdvancedTab::None,  AdvancedTab::DeEss, AdvancedTab::Air
+    };
+    // bypass states
+    bool bypassed[5] = {
+        cleanBypassBtn.button.getToggleState(),
+        roomBypassBtn.button.getToggleState(),
+        reverbBypassBtn.button.getToggleState(),
+        deEssBypassBtn.button.getToggleState(),
+        airBypassBtn.button.getToggleState()
+    };
+
+    for (int i = 0; i < 5; ++i)
+    {
+        float fx = (float)modX[i], fy = (float)modY;
+        float fw = (float)modW,    fh = (float)modH;
+        float r  = 9.0f;
+        bool  sel = (currentTab != AdvancedTab::None && currentTab == tabForMod[i]);
+        float cardAlpha = bypassed[i] ? 0.30f : 0.55f;
+
+        // Ombre douce
+        g.setColour(juce::Colour(0xFF283050).withAlpha(0.07f));
+        g.fillRoundedRectangle(fx + 1, fy + 2, fw, fh, r);
+
+        // Fond carte glass
+        g.setColour(juce::Colours::white.withAlpha(cardAlpha));
+        g.fillRoundedRectangle(fx, fy, fw, fh, r);
+
+        // Bordure blanche glass
+        g.setColour(juce::Colours::white.withAlpha(0.75f));
+        g.drawRoundedRectangle(fx, fy, fw, fh, r, 1.0f);
+
+        // Overlay cyan si sélectionné
+        if (sel)
         {
-            g.setColour(juce::Colours::white);
-            g.fillRoundedRectangle((float)x, (float)y, (float)w, (float)h, 6.0f);
+            g.setColour(juce::Colour(0xFF13add6));
+            g.drawRoundedRectangle(fx - 1, fy - 1, fw + 2, fh + 2, r, 1.5f);
+        }
 
-            g.setColour(isSelected ? juce::Colour((juce::uint8)74, (juce::uint8)144, (juce::uint8)226).withAlpha(0.8f)
-                : juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.08f));
-            g.drawRoundedRectangle((float)x, (float)y, (float)w, (float)h, 6.0f, isSelected ? 1.5f : 1.0f);
+        // Nom module (centré, y=modY+22)
+        g.setFont(juce::Font(juce::FontOptions(12.0f).withStyle("Bold")));
+        g.setColour(juce::Colour(0xFF26332f).withAlpha(bypassed[i] ? 0.40f : 1.0f));
+        g.drawText(modNames[i], modX[i], modY + 22, modW, 15, juce::Justification::centred);
 
-            g.setColour(juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(isSelected ? 0.9f : 0.4f));
-            g.setFont(juce::Font(juce::FontOptions(11.0f).withStyle("Bold")));
-            g.drawText(title, x, y + 8, w, 20, juce::Justification::centred);
+        // LED (bas de carte)
+        float ledX = fx + fw * 0.5f - 3.5f;
+        float ledY = fy + fh - 18.0f;
+        g.setColour(juce::Colour(0xFFcdddd9));
+        g.fillEllipse(ledX, ledY, 7.0f, 7.0f);
+        if (!bypassed[i])
+        {
+            g.setColour(juce::Colour(0xFF13add6));
+            g.fillEllipse(ledX, ledY, 7.0f, 7.0f);
+        }
+    }
 
-            g.setColour(isSelected ? juce::Colour((juce::uint8)74, (juce::uint8)144, (juce::uint8)226)
-                : juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.1f));
-            g.fillEllipse((float)x + ((float)w / 2.0f) - 2.5f, (float)y + (float)h - 12.0f, 5.0f, 5.0f);
-        };
-
-    // 5 modules identiques : 128px chacun, gap 6px, marges 8px → 680px exact
-    bool cleanTabActive = (currentTab == AdvancedTab::Clean);
-    bool deEssTabActive = (currentTab == AdvancedTab::DeEss);
-    drawModuleGroup(  8, 50, 128, 170, "CLEAN",        cleanTabActive);
-    drawModuleGroup(142, 50, 128, 170, "ROOM",          currentTab == AdvancedTab::Room);
-    drawModuleGroup(276, 50, 128, 170, "DE-REV",        false);
-    drawModuleGroup(410, 50, 128, 170, "DE-ESS",        deEssTabActive);
-    drawModuleGroup(544, 50, 128, 170, "AIR ENHANCER",  currentTab == AdvancedTab::Air);
-
+    // ── Section Advanced ─────────────────────────────────────────────────────
     if (currentTab != AdvancedTab::None)
     {
-        g.setColour(juce::Colour((juce::uint8)228, (juce::uint8)234, (juce::uint8)235));
-        g.fillRect(0, 236, getWidth(), getHeight() - 236);
-
-        g.setColour(juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.08f));
-        g.drawHorizontalLine(235, 0.0f, (float)getWidth());
-
-        g.setColour(juce::Colour((juce::uint8)44, (juce::uint8)62, (juce::uint8)80).withAlpha(0.5f));
+        // Label "ADVANCED CONFIGURATION"
         g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
-        g.drawText("ADVANCED CONFIGURATION", 20, 242, 200, 15, juce::Justification::centredLeft);
+        g.setColour(juce::Colour(0xFF94a5a2));
+        g.drawText("ADVANCED CONFIGURATION", 24, 265, 300, 13, juce::Justification::centredLeft);
+
+        auto drawAdvPanel = [&](float px, float py, float pw, float ph, const juce::String& title)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.40f));
+            g.fillRoundedRectangle(px, py, pw, ph, 9.0f);
+            g.setColour(juce::Colours::white.withAlpha(0.65f));
+            g.drawRoundedRectangle(px, py, pw, ph, 9.0f, 1.0f);
+            g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+            g.setColour(juce::Colour(0xFF94a5a2));
+            g.drawText(title, px + 14, py + 12, pw - 28, 11, juce::Justification::centredLeft);
+        };
 
         if (currentTab == AdvancedTab::Clean)
         {
-            int advY = 280;
-
-            // Panneau NOISE REDUCTION (gauche)
-            g.setColour(juce::Colours::white.withAlpha(0.40f));
-            g.fillRoundedRectangle(14.0f, (float)(advY - 20), 248.0f, 78.0f, 5.0f);
-            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.07f));
-            g.drawRoundedRectangle(14.0f, (float)(advY - 20), 248.0f, 78.0f, 5.0f, 1.0f);
-
-            // Panneau GATE (droite)
-            g.setColour(juce::Colours::white.withAlpha(0.40f));
-            g.fillRoundedRectangle(318.0f, (float)(advY - 20), 352.0f, 78.0f, 5.0f);
-            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.07f));
-            g.drawRoundedRectangle(318.0f, (float)(advY - 20), 352.0f, 78.0f, 5.0f, 1.0f);
-
-            g.setFont(juce::Font(juce::FontOptions(9.5f).withStyle("Bold")));
-            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.55f));
-            g.drawText("NOISE REDUCTION", 22,  advY - 15, 180, 12, juce::Justification::centredLeft);
-            g.drawText("GATE",            330, advY - 15, 80,  12, juce::Justification::centredLeft);
+            drawAdvPanel(24, 281, 296, 126, "NOISE REDUCTION");
+            drawAdvPanel(334, 281, 402, 126, "GATE");
         }
         else if (currentTab == AdvancedTab::DeEss)
         {
-            int advY = 280;
-            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.45f));
-            g.drawText("DE-ESSER", 50, advY - 16, 200, 13, juce::Justification::centredLeft);
+            drawAdvPanel(24, 281, (float)(W - 48), 96, "DE-ESSER ADVANCED");
         }
         else if (currentTab == AdvancedTab::Room)
         {
-            int advY = 262;
-            g.setColour(juce::Colour(0xFF2C3E50).withAlpha(0.45f));
-            g.drawText("NOTCH FREQ", 260, advY - 16, 66, 13, juce::Justification::centredLeft);
-            g.drawText("NOTCH Q",    326, advY - 16, 54, 13, juce::Justification::centredLeft);
+            // no panel drawn, les sliders Room et le visualiseur sont sur fond libre
+            g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+            g.setColour(juce::Colour(0xFF94a5a2));
+            g.drawText("NOTCH FREQ", 264, 293, 66, 11, juce::Justification::centredLeft);
+            g.drawText("NOTCH Q",    332, 293, 54, 11, juce::Justification::centredLeft);
+        }
+        else if (currentTab == AdvancedTab::Air)
+        {
+            drawAdvPanel(24, 281, (float)(W - 48), 96, "AIR CHARACTER");
         }
     }
 }
 
 // =============================================================================
-//  PLACEMENT ET GEOMETRIE DES ELEMENTS (RESIZED)
+//  PLACEMENT — ARC FIN (760px, modules 136px aux x=[24,168,312,456,600])
 // =============================================================================
 void InvisibleFixAudioProcessorEditor::resized()
 {
-    // Modules : x=[8,142,276,410,544], w=128 chacun, gap=6px, marges=8px → 680px
-    // Knob 90px (rotary 76px + textbox 14px), centré dans 128px → offset=19px
-    int sSize   = 90;
-    int sY      = 72;   // juste après les boutons (finissent à y=71)
-    int sLabelY = 172;  // description légère sous la textbox (qui finit à y=162)
+    // ── Façade : knob 94px + textbox 20px = 114px, centré dans 136px → x+21 ──
+    const int modX[5] = { 24, 168, 312, 456, 600 };
+    int sKnobY = 95;  // y du knob dans le module (après BYP+name: 58+11+14+12=95)
+    int sLabelY = 95 + 114 + 5; // sous la textbox : 214
 
-    cleanSlider.slider.setBounds(  8+19, sY, sSize, sSize);
-    cleanSlider.label.setBounds(   8,   sLabelY, 128, 14);
+    ModernSlider* facadeSliders[5] = {
+        &cleanSlider, &roomSlider, &reverbSlider, &deEssSlider, &airSlider
+    };
+    for (int i = 0; i < 5; ++i)
+    {
+        facadeSliders[i]->slider.setBounds(modX[i] + 21, sKnobY, 94, 114);
+        facadeSliders[i]->label.setBounds(modX[i], sLabelY, 136, 12);
+    }
 
-    roomSlider.slider.setBounds( 142+19, sY, sSize, sSize);
-    roomSlider.label.setBounds(  142,  sLabelY, 128, 14);
+    // ── BYP et △ dans chaque module ──────────────────────────────────────────
+    // BYP: coin sup-gauche, △: coin sup-droit, tous deux à y=69 (dans la carte)
+    int bY = 69, bW = 26, bH = 14;
+    CustomButton* bypBtns[5] = {
+        &cleanBypassBtn, &roomBypassBtn, &reverbBypassBtn, &deEssBypassBtn, &airBypassBtn
+    };
+    CustomButton* deltaBtns[5] = {
+        &deltaBtn, &roomDeltaBtn, &reverbDeltaBtn, &deEssDeltaBtn, &airDeltaBtn
+    };
+    for (int i = 0; i < 5; ++i)
+    {
+        bypBtns[i]->button.setBounds(modX[i] + 8,            bY, bW, bH);
+        deltaBtns[i]->button.setBounds(modX[i] + 136 - 8 - 16, bY, 16, bH);
+    }
 
-    reverbSlider.slider.setBounds(276+19, sY, sSize, sSize);
-    reverbSlider.label.setBounds( 276, sLabelY, 128, 14);
+    // ── Master gain ───────────────────────────────────────────────────────────
+    masterGainLabel.setBounds(getWidth() - 200, 12, 80, 28);
+    masterGainSlider.setBounds(getWidth() - 116, 18, 92, 20);
 
-    deEssSlider.slider.setBounds( 410+19, sY, sSize, sSize);
-    deEssSlider.label.setBounds(  410, sLabelY, 128, 14);
+    // ── Masquer tous les contrôles advanced ──────────────────────────────────
+    if (roomVisualizer != nullptr) roomVisualizer->setVisible(false);
 
-    airSlider.slider.setBounds(  544+19, sY, sSize, sSize);
-    airSlider.label.setBounds(   544, sLabelY, 128, 14);
-
-    // Bypass : coin sup-gauche de chaque module — même ligne que Delta (bY=53)
-    int bY = 53, bW = 28, bH = 18;
-    cleanBypassBtn.button.setBounds(   8+4, bY, bW, bH);
-    roomBypassBtn.button.setBounds(  142+4, bY, bW, bH);
-    reverbBypassBtn.button.setBounds(276+4, bY, bW, bH);
-    deEssBypassBtn.button.setBounds( 410+4, bY, bW, bH);
-    airBypassBtn.button.setBounds(   544+4, bY, bW, bH);
-
-    // Delta : coin sup-droit de chaque module — même ligne que Bypass
-    int dW = 24, dH = 18;
-    deltaBtn.button.setBounds(       8+128-dW-4, bY, dW, dH);
-    roomDeltaBtn.button.setBounds(  142+128-dW-4, bY, dW, dH);
-    reverbDeltaBtn.button.setBounds(276+128-dW-4, bY, dW, dH);
-    deEssDeltaBtn.button.setBounds( 410+128-dW-4, bY, dW, dH);
-    airDeltaBtn.button.setBounds(   544+128-dW-4, bY, dW, dH);
-
-    masterGainLabel.setBounds(getWidth() - 195, 0, 75, 35);
-    masterGainSlider.setBounds(getWidth() - 115, 8, 100, 20);
-
-    if (roomVisualizer != nullptr)
-        roomVisualizer->setVisible(false);
-
-    advRoomFreqSlider.slider.setVisible(false);   advRoomFreqSlider.label.setVisible(false);
-    advRoomQSlider.slider.setVisible(false);      advRoomQSlider.label.setVisible(false);
-    advDeEssFreqSlider.slider.setVisible(false);    advDeEssFreqSlider.label.setVisible(false);
-    advDeEssThreshSlider.slider.setVisible(false);  advDeEssThreshSlider.label.setVisible(false);
-    advDeEssIntenSlider.slider.setVisible(false);   advDeEssIntenSlider.label.setVisible(false);
-    advDeEssAtkSlider.slider.setVisible(false);     advDeEssAtkSlider.label.setVisible(false);
-    advDeEssRelSlider.slider.setVisible(false);     advDeEssRelSlider.label.setVisible(false);
-    advDeEssDetectSlider.slider.setVisible(false);  advDeEssDetectSlider.label.setVisible(false);
-    advGateFloorSlider.slider.setVisible(false);    advGateFloorSlider.label.setVisible(false);
-    advCleanRelSlider.slider.setVisible(false);     advCleanRelSlider.label.setVisible(false);
+    auto hideSlider = [](ModernSlider& ms) {
+        ms.slider.setVisible(false); ms.label.setVisible(false);
+    };
+    hideSlider(advRoomFreqSlider);  hideSlider(advRoomQSlider);
+    hideSlider(advDeEssFreqSlider); hideSlider(advDeEssThreshSlider);
+    hideSlider(advDeEssIntenSlider); hideSlider(advDeEssAtkSlider);
+    hideSlider(advDeEssRelSlider);  hideSlider(advDeEssDetectSlider);
+    hideSlider(advGateFloorSlider); hideSlider(advCleanRelSlider);
+    hideSlider(advGateThresholdSlider); hideSlider(advGateAttackSlider);
+    hideSlider(advGateHoldSlider);
+    hideSlider(advAirDriveSlider);
+    hideSlider(nrThreshSlider); hideSlider(nrRatioSlider);
+    hideSlider(nrFloorSlider);  hideSlider(nrSmoothSlider);
     deEssModeBtn.button.setVisible(false);
-
     advAirFreqSlider.setVisible(false);
     airCharacterLabel.setVisible(false);
-    advGateThresholdSlider.slider.setVisible(false); advGateThresholdSlider.label.setVisible(false);
-    advGateAttackSlider.slider.setVisible(false);    advGateAttackSlider.label.setVisible(false);
-    advGateHoldSlider.slider.setVisible(false);      advGateHoldSlider.label.setVisible(false);
-    advAirDriveSlider.slider.setVisible(false);      advAirDriveSlider.label.setVisible(false);
-    nrThreshSlider.slider.setVisible(false);  nrThreshSlider.label.setVisible(false);
-    nrRatioSlider.slider.setVisible(false);   nrRatioSlider.label.setVisible(false);
-    nrFloorSlider.slider.setVisible(false);   nrFloorSlider.label.setVisible(false);
-    nrSmoothSlider.slider.setVisible(false);  nrSmoothSlider.label.setVisible(false);
 
-    int advY = 280;
-    int advS = 54;
+    // ── Advanced tabs ─────────────────────────────────────────────────────────
+    // Knobs advanced: 50px rotary + 16px textbox = 66px total
+    // Étiquette paramètre: sous le knob+textbox, h=10
+    // advY = y départ des knobs dans le panneau
+    // NR panel: x=24 pad=14 → 1er knob à x=38
+    //   4 knobs, écart = (296-28-200)/3 = 22.67 → ~23px → pitch=73px
+    //   positions x: 38, 111, 184, 257
+    // Gate panel: x=334 pad=14 → 1er knob à x=348
+    //   5 knobs, pitch=(402-28-250)/4=31px → pitch=81px
+    //   positions x: 348, 429, 510, 591, 672
 
-    if (currentTab == AdvancedTab::Room)
+    if (currentTab == AdvancedTab::Clean)
     {
-        int advY = 262; // le visualiseur est plus haut pour tenir dans 360px
+        int advY = 322;  // y knob dans panneau (panneaux à y=281, pad+label=41)
+        int gS = 50, gH = 66, lH = 10;
+
+        auto show = [](ModernSlider& ms) { ms.slider.setVisible(true); ms.label.setVisible(true); };
+        auto place = [&](ModernSlider& ms, int px, int py) {
+            ms.slider.setBounds(px, py, gS, gH);
+            ms.label.setBounds(px, py + gH + 3, gS, lH);
+        };
+        show(nrThreshSlider);  place(nrThreshSlider,  38,  advY);
+        show(nrRatioSlider);   place(nrRatioSlider,   111, advY);
+        show(nrFloorSlider);   place(nrFloorSlider,   184, advY);
+        show(nrSmoothSlider);  place(nrSmoothSlider,  257, advY);
+
+        show(advGateThresholdSlider); place(advGateThresholdSlider, 348, advY);
+        show(advGateAttackSlider);    place(advGateAttackSlider,    429, advY);
+        show(advGateHoldSlider);      place(advGateHoldSlider,      510, advY);
+        show(advGateFloorSlider);     place(advGateFloorSlider,     591, advY);
+        show(advCleanRelSlider);      place(advCleanRelSlider,      672, advY);
+    }
+    else if (currentTab == AdvancedTab::Room)
+    {
+        int advY = 303;
+        int advS = 50, gH = 66, lH = 10;
         if (roomVisualizer != nullptr) {
             addAndMakeVisible(roomVisualizer.get());
             roomVisualizer->setVisible(true);
-            roomVisualizer->setBounds(20, advY, 210, 80);
+            roomVisualizer->setBounds(24, advY, 220, 75);
         }
-
         advRoomFreqSlider.slider.setVisible(true); advRoomFreqSlider.label.setVisible(true);
         advRoomQSlider.slider.setVisible(true);    advRoomQSlider.label.setVisible(true);
-        advRoomFreqSlider.slider.setBounds(260, advY, advS, advS);
-        advRoomFreqSlider.label.setBounds(260, advY + 54, advS, 14);
-        advRoomQSlider.slider.setBounds(326, advY, advS, advS);
-        advRoomQSlider.label.setBounds(326, advY + 54, advS, 14);
-    }
-    else if (currentTab == AdvancedTab::Clean)
-    {
-        // --- NR (gauche) + GATE (droite) sur la même ligne ---
-        int gS = 50;
-
-        // NR — 4 knobs à gauche
-        nrThreshSlider.slider.setVisible(true);  nrThreshSlider.label.setVisible(true);
-        nrRatioSlider.slider.setVisible(true);   nrRatioSlider.label.setVisible(true);
-        nrFloorSlider.slider.setVisible(true);   nrFloorSlider.label.setVisible(true);
-        nrSmoothSlider.slider.setVisible(true);  nrSmoothSlider.label.setVisible(true);
-
-        nrThreshSlider.slider.setBounds(22,  advY, gS, gS); nrThreshSlider.label.setBounds(22,  advY + gS, gS, 14);
-        nrRatioSlider.slider.setBounds(78,   advY, gS, gS); nrRatioSlider.label.setBounds(78,   advY + gS, gS, 14);
-        nrFloorSlider.slider.setBounds(134,  advY, gS, gS); nrFloorSlider.label.setBounds(134,  advY + gS, gS, 14);
-        nrSmoothSlider.slider.setBounds(190, advY, gS, gS); nrSmoothSlider.label.setBounds(190, advY + gS, gS, 14);
-
-        // GATE — 5 knobs à droite
-        advGateThresholdSlider.slider.setVisible(true); advGateThresholdSlider.label.setVisible(true);
-        advGateAttackSlider.slider.setVisible(true);    advGateAttackSlider.label.setVisible(true);
-        advGateHoldSlider.slider.setVisible(true);      advGateHoldSlider.label.setVisible(true);
-        advGateFloorSlider.slider.setVisible(true);     advGateFloorSlider.label.setVisible(true);
-        advCleanRelSlider.slider.setVisible(true);      advCleanRelSlider.label.setVisible(true);
-
-        advGateThresholdSlider.slider.setBounds(330, advY, gS, gS); advGateThresholdSlider.label.setBounds(330, advY + gS, gS, 14);
-        advGateAttackSlider.slider.setBounds(386,    advY, gS, gS); advGateAttackSlider.label.setBounds(386,    advY + gS, gS, 14);
-        advGateHoldSlider.slider.setBounds(442,      advY, gS, gS); advGateHoldSlider.label.setBounds(442,      advY + gS, gS, 14);
-        advGateFloorSlider.slider.setBounds(498,     advY, gS, gS); advGateFloorSlider.label.setBounds(498,     advY + gS, gS, 14);
-        advCleanRelSlider.slider.setBounds(554,      advY, gS, gS); advCleanRelSlider.label.setBounds(554,      advY + gS, gS, 14);
+        advRoomFreqSlider.slider.setBounds(264, advY + 10, advS, gH);
+        advRoomFreqSlider.label.setBounds(264, advY + 10 + gH + 3, advS, lH);
+        advRoomQSlider.slider.setBounds(330, advY + 10, advS, gH);
+        advRoomQSlider.label.setBounds(330, advY + 10 + gH + 3, advS, lH);
     }
     else if (currentTab == AdvancedTab::DeEss)
     {
-        advDeEssFreqSlider.slider.setVisible(true);   advDeEssFreqSlider.label.setVisible(true);
-        advDeEssThreshSlider.slider.setVisible(true); advDeEssThreshSlider.label.setVisible(true);
-        advDeEssIntenSlider.slider.setVisible(true);  advDeEssIntenSlider.label.setVisible(true);
-        advDeEssAtkSlider.slider.setVisible(true);    advDeEssAtkSlider.label.setVisible(true);
-        advDeEssRelSlider.slider.setVisible(true);    advDeEssRelSlider.label.setVisible(true);
+        int advY = 308;
+        int advS = 50, gH = 66, lH = 10;
+        // 7 knobs + mode btn espacés dans le panneau
+        auto show = [](ModernSlider& ms) { ms.slider.setVisible(true); ms.label.setVisible(true); };
+        auto place = [&](ModernSlider& ms, int px) {
+            ms.slider.setBounds(px, advY, advS, gH);
+            ms.label.setBounds(px, advY + gH + 3, advS, lH);
+        };
+        show(advDeEssFreqSlider);   place(advDeEssFreqSlider,   50);
+        show(advDeEssThreshSlider); place(advDeEssThreshSlider, 115);
+        show(advDeEssIntenSlider);  place(advDeEssIntenSlider,  180);
+        show(advDeEssAtkSlider);    place(advDeEssAtkSlider,    245);
+        show(advDeEssRelSlider);    place(advDeEssRelSlider,    310);
         deEssModeBtn.button.setVisible(true);
-        advDeEssDetectSlider.slider.setVisible(true); advDeEssDetectSlider.label.setVisible(true);
-
-        advDeEssFreqSlider.slider.setBounds(50,   advY, advS, advS);
-        advDeEssFreqSlider.label.setBounds(50,    advY + 54, advS, 14);
-        advDeEssThreshSlider.slider.setBounds(115, advY, advS, advS);
-        advDeEssThreshSlider.label.setBounds(115,  advY + 54, advS, 14);
-        advDeEssIntenSlider.slider.setBounds(180, advY, advS, advS);
-        advDeEssIntenSlider.label.setBounds(180,  advY + 54, advS, 14);
-        advDeEssAtkSlider.slider.setBounds(245,   advY, advS, advS);
-        advDeEssAtkSlider.label.setBounds(245,    advY + 54, advS, 14);
-        advDeEssRelSlider.slider.setBounds(310,   advY, advS, advS);
-        advDeEssRelSlider.label.setBounds(310,    advY + 54, advS, 14);
-        deEssModeBtn.button.setBounds(375, advY + 16, 55, 22);
-        advDeEssDetectSlider.slider.setBounds(445, advY, advS, advS);
-        advDeEssDetectSlider.label.setBounds(445,  advY + 54, advS, 14);
+        deEssModeBtn.button.setBounds(378, advY + 20, 55, 22);
+        show(advDeEssDetectSlider); place(advDeEssDetectSlider, 448);
     }
     else if (currentTab == AdvancedTab::Air)
     {
+        int advY = 308;
         advAirFreqSlider.setVisible(true);
         advAirDriveSlider.slider.setVisible(true); advAirDriveSlider.label.setVisible(true);
         airCharacterLabel.setVisible(true);
-        advAirFreqSlider.setBounds(40, advY + 15, 360, 25);
-        advAirDriveSlider.slider.setBounds(420, advY - 5, 60, 60);
-        advAirDriveSlider.label.setBounds(420, advY + 55, 60, 14);
-        airCharacterLabel.setBounds(490, advY + 15, 180, 25);
+        advAirFreqSlider.setBounds(40, advY + 20, 360, 25);
+        advAirDriveSlider.slider.setBounds(424, advY, 50, 66);
+        advAirDriveSlider.label.setBounds(424, advY + 69, 50, 10);
+        airCharacterLabel.setBounds(490, advY + 20, 220, 25);
     }
 }
 
@@ -642,19 +734,19 @@ void InvisibleFixAudioProcessorEditor::mouseUp(const juce::MouseEvent& event)
     juce::Point<int> clickPos = event.getPosition();
     AdvancedTab clickedTab = AdvancedTab::None;
 
-    if      (juce::Rectangle<int>(  8, 50, 128, 170).contains(clickPos)) clickedTab = AdvancedTab::Clean;
-    else if (juce::Rectangle<int>(142, 50, 128, 170).contains(clickPos)) clickedTab = AdvancedTab::Room;
-    else if (juce::Rectangle<int>(410, 50, 128, 170).contains(clickPos)) clickedTab = AdvancedTab::DeEss;
-    else if (juce::Rectangle<int>(544, 50, 128, 170).contains(clickPos)) clickedTab = AdvancedTab::Air;
+    // Zones de clic : 5 modules x=[24,168,312,456,600] w=136, y=58 h=200
+    if      (juce::Rectangle<int>( 24, 58, 136, 200).contains(clickPos)) clickedTab = AdvancedTab::Clean;
+    else if (juce::Rectangle<int>(168, 58, 136, 200).contains(clickPos)) clickedTab = AdvancedTab::Room;
+    else if (juce::Rectangle<int>(456, 58, 136, 200).contains(clickPos)) clickedTab = AdvancedTab::DeEss;
+    else if (juce::Rectangle<int>(600, 58, 136, 200).contains(clickPos)) clickedTab = AdvancedTab::Air;
 
     if (clickedTab != AdvancedTab::None)
     {
         if (currentTab == clickedTab) currentTab = AdvancedTab::None;
         else                          currentTab = clickedTab;
 
-        if      (currentTab == AdvancedTab::None)  setSize(680, 240);
-        else if (currentTab == AdvancedTab::Clean)  setSize(680, 360);
-        else                                        setSize(680, 360);
+        if (currentTab == AdvancedTab::None) setSize(760, 290);
+        else                                  setSize(760, 440);
 
         resized();
         repaint();

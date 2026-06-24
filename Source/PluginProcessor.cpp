@@ -91,6 +91,13 @@ void InvisibleFixAudioProcessor::prepareToPlay(double sampleRate, int samplesPer
 
         reverbEnvSlow[ch] = 0.0f;
 
+        rmsWritePos[ch] = 0;
+        rmsSumSq[ch]    = 0.0f;
+        for (int i = 0; i < RMS_WINDOW_SIZE; ++i)
+            rmsBuffer[ch][i] = 0.0f;
+        gateSidechainZ1[ch]  = 0.0; gateSidechainZ2[ch]  = 0.0;
+        gateSidechainZ1b[ch] = 0.0; gateSidechainZ2b[ch] = 0.0;
+
         airShelfZ1[ch] = 0.0;  airShelfZ2[ch] = 0.0;
         smoothedOutputGain[ch] = 1.0f;
 
@@ -281,6 +288,28 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
         }
     }
 
+    // --- FILTRE SIDECHAIN GATE (Passe-bande 200–3000 Hz, corps vocal) ---
+    // Étage 1 : HP 200 Hz, Q=0.707
+    double gsHPw0    = juce::MathConstants<double>::twoPi * 200.0 / currentSampleRate;
+    double gsHPcos   = std::cos(gsHPw0);
+    double gsHPalpha = std::sin(gsHPw0) / (2.0 * 0.707);
+    double gsHPA0    = 1.0 + gsHPalpha;
+    double gsHPB0    = ((1.0 + gsHPcos) / 2.0) / gsHPA0;
+    double gsHPB1    = (-(1.0 + gsHPcos))       / gsHPA0;
+    double gsHPB2    = ((1.0 + gsHPcos) / 2.0)  / gsHPA0;
+    double gsHPA1    = (-2.0 * gsHPcos)          / gsHPA0;
+    double gsHPA2    = (1.0 - gsHPalpha)         / gsHPA0;
+    // Étage 2 : LP 3000 Hz, Q=0.707
+    double gsLPw0    = juce::MathConstants<double>::twoPi * 3000.0 / currentSampleRate;
+    double gsLPcos   = std::cos(gsLPw0);
+    double gsLPalpha = std::sin(gsLPw0) / (2.0 * 0.707);
+    double gsLPA0    = 1.0 + gsLPalpha;
+    double gsLPB0    = ((1.0 - gsLPcos) / 2.0) / gsLPA0;
+    double gsLPB1    = (1.0 - gsLPcos)          / gsLPA0;
+    double gsLPB2    = ((1.0 - gsLPcos) / 2.0)  / gsLPA0;
+    double gsLPA1    = (-2.0 * gsLPcos)          / gsLPA0;
+    double gsLPA2    = (1.0 - gsLPalpha)         / gsLPA0;
+
     // Détecteur De-Ess : passe-bande étroit centré sur deEssFreq
     double deDetB0{ 1.0 }, deDetB1{ 0.0 }, deDetB2{ 0.0 }, deDetA1{ 0.0 }, deDetA2{ 0.0 };
     if (knobDeEss > 0.001f && !deessBypass) {
@@ -310,7 +339,25 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
             {
                 if (knobClean > 0.001f)
                 {
-                    float currentEnv = std::abs((float)x);
+                    // NOTE : currentEnv est RMS filtré 200–3000 Hz.
+                    // Les valeurs RMS sont ~3–10 dB sous les valeurs peak équivalentes.
+                    // Si le gate semble trop fermé, abaisser cleanGateThreshold de 3–6 dB.
+                    // Étage 1 : HP 200 Hz
+                    double gsSC_hp = gsHPB0 * x + gateSidechainZ1[channel];
+                    gateSidechainZ1[channel]  = gsHPB1 * x       - gsHPA1 * gsSC_hp + gateSidechainZ2[channel];
+                    gateSidechainZ2[channel]  = gsHPB2 * x       - gsHPA2 * gsSC_hp;
+                    // Étage 2 : LP 3000 Hz (cascade sur sortie HP)
+                    double gsSC_bp = gsLPB0 * gsSC_hp + gateSidechainZ1b[channel];
+                    gateSidechainZ1b[channel] = gsLPB1 * gsSC_hp - gsLPA1 * gsSC_bp + gateSidechainZ2b[channel];
+                    gateSidechainZ2b[channel] = gsLPB2 * gsSC_hp - gsLPA2 * gsSC_bp;
+                    // RMS sur fenêtre glissante
+                    float scSample = (float)gsSC_bp;
+                    float newSq    = scSample * scSample;
+                    float oldSq    = rmsBuffer[channel][rmsWritePos[channel]];
+                    rmsSumSq[channel] += newSq - oldSq;
+                    rmsBuffer[channel][rmsWritePos[channel]] = newSq;
+                    rmsWritePos[channel] = (rmsWritePos[channel] + 1) % RMS_WINDOW_SIZE;
+                    float currentEnv = std::sqrt(juce::jmax(0.0f, rmsSumSq[channel] / (float)RMS_WINDOW_SIZE));
                     float noiseFloorEst = nrFloor[1][channel];
                     float hysteresisDB = juce::jlimit(1.5f, 5.0f, 2.0f + noiseFloorEst * 8.0f);
                     float hysteresisFactor = std::pow(10.0f, hysteresisDB / 20.0f);

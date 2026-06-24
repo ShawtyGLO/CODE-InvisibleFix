@@ -80,6 +80,18 @@ private:
     float smoothedCleanGain[2]{ 1.0f, 1.0f };
     float smoothedGateGain[2]{ 1.0f, 1.0f };
 
+    // --- DÉTECTEUR RMS GATE (fenêtre glissante ~23ms) ---
+    static constexpr int RMS_WINDOW_SIZE = 1024; // ~23ms @ 44100 Hz
+    float rmsBuffer[2][RMS_WINDOW_SIZE]{};
+    int   rmsWritePos[2]{ 0, 0 };
+    float rmsSumSq[2]{ 0.0f, 0.0f };
+
+    // --- SIDECHAIN PASSE-BANDE GATE (HP 200 Hz + LP 3000 Hz en cascade) ---
+    double gateSidechainZ1[2]{ 0.0, 0.0 };   // mémoires étage HP
+    double gateSidechainZ2[2]{ 0.0, 0.0 };
+    double gateSidechainZ1b[2]{ 0.0, 0.0 };  // mémoires étage LP
+    double gateSidechainZ2b[2]{ 0.0, 0.0 };
+
     // États du Gate (hystérésis adaptatif)
     bool gateIsOpen[2]{ true, true };
     int gateHoldCounter[2]{ 0, 0 };
