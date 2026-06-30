@@ -4,8 +4,12 @@
 #include "PluginProcessor.h"
 
 class RoomVisualizer;
+class DualRailComponent;
+class AHREnvelopeEditor;
+class DeEssDetectDisplay;
 
-class InvisibleFixAudioProcessorEditor : public juce::AudioProcessorEditor
+class InvisibleFixAudioProcessorEditor : public juce::AudioProcessorEditor,
+                                          private juce::Timer
 {
 public:
     InvisibleFixAudioProcessorEditor(InvisibleFixAudioProcessor&);
@@ -89,6 +93,24 @@ private:
     // Fonctions utilitaires de design
     void setupModernSlider(ModernSlider& modernSlider, const juce::String& name);
     void applyModernKnobStyle(juce::Slider& slider);
+    void updateBypassAlphas();
+    void timerCallback() override;
+
+    bool bypassBlinkOn = true;
+    int  blinkCounter  = 0;
+
+    // Nouveaux composants graphiques UX
+    juce::TextButton nrLearnBtn;
+    bool nrLearnBtnActive{ false };
+    juce::TextButton gateAutoBtn;
+    std::unique_ptr<DualRailComponent> nrDualRail;
+    std::unique_ptr<juce::Component>   nrBandDisplay;
+    std::unique_ptr<DualRailComponent>   gateDualRail;
+    std::unique_ptr<juce::Component>     gateWaveform;
+    std::unique_ptr<juce::Component>   gateAHR;
+    std::unique_ptr<juce::Component>   deEssAR;
+    std::unique_ptr<DeEssDetectDisplay> deEssDetect;
+    float nrVuLevel = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(InvisibleFixAudioProcessorEditor)
 };

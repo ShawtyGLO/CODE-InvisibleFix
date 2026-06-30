@@ -44,11 +44,29 @@ public:
     // Fonction de calcul des filtres du tiroir Room
     void updateRoomCoefficients(float room);
 
-    // Copie thread-safe des magnitudes FFT vers le visualiseur
+    // Copie thread-safe des magnitudes FFT vers le visualiseur (post-room)
+    void copyNRBandGains(float* dest, int numBands);
     void copyFftMagnitudes(float* dest, int numBins);
+
+    // Copie des magnitudes FFT de l'entrée brute (pré-tout-traitement, actif même en Delta)
+    void copyInputFftMagnitudes(float* dest, int numBins);
 
     // APVTS Public pour les liaisons de l'interface (Attachments)
     juce::AudioProcessorValueTreeState apvts;
+
+    // NR Snapshot — accès public pour l'UI (atomics thread-safe)
+    bool  nrSnapshotActive{ false };
+    std::atomic<bool> nrSnapshotRequest{ false };
+    std::atomic<bool> nrSnapshotRelease{ false };
+
+    // Gate auto-threshold — données exposées vers l'UI (lecture seule depuis UI thread)
+    float gateHistogram[80]{};          // histogramme niveaux -80..0 dBFS (1 dB/bucket)
+    float gateCurrentLevelDB{ -80.0f }; // niveau RMS sidechain courant
+    float gateAutoThreshDB{ -40.0f };   // seuil optimal détecté
+    float gateAutoZoneLow{ -80.0f };    // borne basse de la zone optimale
+    float gateAutoZoneHigh{ -80.0f };   // borne haute de la zone optimale
+    bool  gateAutoZoneValid{ false };   // fiabilité de la détection
+    bool  gateIsOpenForDisplay{ true }; // état gate canal 0, mis à jour dans processBlock
 
 private:
     // --- PARAMÈTRES AUDIO GLOBAUX ---
@@ -95,35 +113,66 @@ private:
     // États du Gate (hystérésis adaptatif)
     bool gateIsOpen[2]{ true, true };
     int gateHoldCounter[2]{ 0, 0 };
+    int gateHistCounter{ 0 };  // compteur pour mise à jour histogramme (canal 0 seulement)
 
-    // --- ENVELOPPE DUAL : MODULE REVERB ABSORBER ---
-    float reverbEnv[2]{ 0.0f, 0.0f };     // fast : suit les transitoires
-    float reverbEnvSlow[2]{ 0.0f, 0.0f }; // slow : suit la queue de réverb
+    // --- DE-REV 3 BANDES (Cedar/Eventide-style) ---
+    // Banc de filtres LP complémentaires : coupures 500 Hz / 4000 Hz
+    double revSplitZ1[2][2]{};   // états biquad [coupure 0-1][canal]
+    double revSplitZ2[2][2]{};
+    // Sidechain 200-3000 Hz pour détection vocale (évite pompage sur résidus basse fréquence)
+    double revScHPZ1[2]{}, revScHPZ2[2]{};  // HP 200 Hz
+    double revScLPZ1[2]{}, revScLPZ2[2]{};  // LP 3000 Hz
+    // Enveloppes par bande [bande 0-2][canal]
+    float revBandFast[3][2]{};   // enveloppe rapide (transitoires)
+    float revBandSlow[3][2]{};   // enveloppe lente (queue de réverb)
+
+    // --- DE-ESS : LOOK-AHEAD + SEUIL ADAPTATIF ---
+    static constexpr int DEESS_LOOKAHEAD_MAX = 512;
+    float deEssLookahead[2][DEESS_LOOKAHEAD_MAX]{};
+    int   deEssLookaheadWrite[2]{ 0, 0 };
+    int   deEssLookaheadLen{ 88 };   // recalculé dans prepareToPlay (= 2ms)
+    float deEssAdaptEnv[2]{ 0.0f, 0.0f };  // slow follower du niveau sibilant
+
+    // --- ENVELOPPE DUAL : MODULE REVERB ABSORBER (legacy, conservé pour compatibilité) ---
+    float reverbEnv[2]{ 0.0f, 0.0f };
+    float reverbEnvSlow[2]{ 0.0f, 0.0f };
 
     // --- COEFFS ET MÉMOIRES : MODULE AIR & OUTPUT ---
     double airShelfZ1[2]{ 0.0, 0.0 }, airShelfZ2[2]{ 0.0, 0.0 };
+    // Filtre HPF du chemin Heat (parallèle, indépendant du shelf)
+    double heatHPZ1[2]{ 0.0, 0.0 }, heatHPZ2[2]{ 0.0, 0.0 };
     float smoothedOutputGain[2]{ 1.0f, 1.0f };
 
-    // --- NR : CROSSOVER LR4 (2× biquads par filtre) ---
-    double nrLPLowB0[2]{ 1.0,1.0 }, nrLPLowB1[2]{ 0.0,0.0 }, nrLPLowB2[2]{ 0.0,0.0 };
-    double nrLPLowA1[2]{ 0.0,0.0 }, nrLPLowA2[2]{ 0.0,0.0 };
-    double nrLPLowZ1[2][2]{ {0.0},{0.0} }, nrLPLowZ2[2][2]{ {0.0},{0.0} };
+    // --- NR CEDAR 6 BANDES : banc de filtres LP complémentaires ---
+    double nrSplitZ1[5][2]{};
+    double nrSplitZ2[5][2]{};
+    float nrBandEnv[6][2]{};
+    float nrBandPrevEnv[6][2]{};
+    float nrNoiseFloor[6][2]{};
+    float nrBandGain[6][2]{};
 
-    double nrHPHighB0[2]{ 1.0,1.0 }, nrHPHighB1[2]{ 0.0,0.0 }, nrHPHighB2[2]{ 0.0,0.0 };
-    double nrHPHighA1[2]{ 0.0,0.0 }, nrHPHighA2[2]{ 0.0,0.0 };
-    double nrHPHighZ1[2][2]{ {0.0},{0.0} }, nrHPHighZ2[2][2]{ {0.0},{0.0} };
+    // --- NR FLOOR ESTIMATION : rolling minimum (deux demi-fenêtres de 0.5s) ---
+    int   nrWindowPeriod{ 22050 };         // recalculé dans prepareToPlay
+    int   nrHistCounter[2]{ 0, 0 };
+    float nrCurrWindowMin[6][2]{};         // minimum de la demi-fenêtre courante
+    float nrPrevWindowMin[6][2]{};         // minimum de la demi-fenêtre précédente
+    float nrRollingMin[6][2]{};            // min(curr, prev) = estimation plancher
 
-    // --- NR : ENVELOPPES, FLOOR, GAIN PAR BANDE ---
-    float nrEnv[3][2]{ 0.0f,0.0f, 0.0f,0.0f, 0.0f,0.0f };
-    float nrFloor[3][2]{ 0.0f,0.0f, 0.0f,0.0f, 0.0f,0.0f };
-    float nrSmoothGain[3][2]{ 1.0f,1.0f, 1.0f,1.0f, 1.0f,1.0f };
+    // --- NR SNAPSHOT (bruit de référence capturé manuellement) ---
+    float nrSnapshotFloor[6][2]{};
 
-    // --- FFT HEATMAP (ROOM) ---
+    // --- FFT HEATMAP (ROOM, post-traitement) ---
     static constexpr int fftSize = 4096;
     static constexpr int fftOrder = 12;
     float fftBuffer[fftSize]{ 0.0f };
     float fftMagnitudes[fftSize / 2]{ 0.0f };
     int fftWriteIndex{ 0 };
+
+    // --- FFT ENTRÉE BRUTE (pré-tout-traitement, pour visualiseurs en mode Delta) ---
+    float inputFftBuffer[fftSize]{ 0.0f };
+    float inputFftMagnitudes[fftSize / 2]{ 0.0f };
+    int inputFftWriteIndex{ 0 };
+
     juce::CriticalSection fftMutex;
 
     // Layout des paramètres de l'arbre APVTS
