@@ -51,6 +51,13 @@ public:
     // Copie des magnitudes FFT de l'entrée brute (pré-tout-traitement, actif même en Delta)
     void copyInputFftMagnitudes(float* dest, int numBins);
 
+    // Fréquence réelle du notch Room (trackée, peut différer du slider) + profondeur
+    float getRoomTrackedFreq() const { return dynNotchSmoothedFreq; }
+    float getRoomDynDepth()    const { return dynNotchSmoothedDepth; }
+
+    // UndoManager (avant apvts pour l'ordre d'initialisation)
+    juce::UndoManager undoManager;
+
     // APVTS Public pour les liaisons de l'interface (Attachments)
     juce::AudioProcessorValueTreeState apvts;
 
@@ -59,18 +66,46 @@ public:
     std::atomic<bool> nrSnapshotRequest{ false };
     std::atomic<bool> nrSnapshotRelease{ false };
 
-    // Gate auto-threshold — données exposées vers l'UI (lecture seule depuis UI thread)
+    // ── Preset Manager ────────────────────────────────────────────────────────
+    static constexpr int NUM_FACTORY_PRESETS = 5; // Init + 4 presets
+    int          currentPresetIndex{ 0 };
+    juce::String currentPresetName { "Init" };
+    bool         currentPresetIsFactory{ true };
+
+    // Liste combinée factory + user (construite dans buildPresetList)
+    std::vector<juce::String> presetNames;
+    std::vector<bool>         presetIsFactory;
+    std::vector<juce::File>   userPresetFiles;
+
+    void buildPresetList();
+    void loadPreset(int index);          // applique le preset et met à jour currentPreset*
+    void savePreset(const juce::String& name); // sauvegarde l'état courant comme user preset
+    void deleteUserPreset(int index);    // supprime un user preset (index global)
+    juce::File getUserPresetsDir() const;
+
+    // ── Gate auto-threshold — données exposées vers l'UI ─────────────────────
     float gateHistogram[80]{};          // histogramme niveaux -80..0 dBFS (1 dB/bucket)
     float gateCurrentLevelDB{ -80.0f }; // niveau RMS sidechain courant
     float gateAutoThreshDB{ -40.0f };   // seuil optimal détecté
     float gateAutoZoneLow{ -80.0f };    // borne basse de la zone optimale
     float gateAutoZoneHigh{ -80.0f };   // borne haute de la zone optimale
     bool  gateAutoZoneValid{ false };   // fiabilité de la détection
-    bool  gateIsOpenForDisplay{ true }; // état gate canal 0, mis à jour dans processBlock
+    std::atomic<bool> gateIsOpenForDisplay{ true }; // état gate canal 0, mis à jour dans processBlock
+    std::atomic<bool> globalBypassActive{ false };  // bypass global (UI thread → audio thread)
+
+    // De-Rev : énergie et réduction par bande (lecture UI @ 30 Hz)
+    // Indexation : [0]=LF  [1]=MF  [2]=HF  (cohérent avec l'ordre DSP)
+    std::atomic<float> revBandLiveEnergy[3];
+    std::atomic<float> revBandLiveGR[3];
+
+    // Metering I/O (peak mono, mis à jour par bloc, lus par le timer UI @ 30 Hz)
+    std::atomic<float> inputLevelDisplay{ 0.f };
+    std::atomic<float> outputLevelDisplay{ 0.f };
 
 private:
     // --- PARAMÈTRES AUDIO GLOBAUX ---
     double currentSampleRate{ 44100.0 };
+    bool lastLiveMode{ false };
 
     // --- COEFFS ET MÉMOIRES : MODULE ROOM (NOTCH + COMPENSATION) ---
     double notchB0{ 1.0 }, notchB1{ 0.0 }, notchB2{ 0.0 };
@@ -90,8 +125,15 @@ private:
     float lastRoomFreq{ -999.0f };
     float lastRoomQ{ -999.0f };
 
+    // --- NOTCH DYNAMIQUE ROOM : détection automatique de pic + suivi de fréquence ---
+    float dynNotchSmoothedFreq{ 440.0f };   // fréquence lissée du pic dominant
+    float dynNotchSmoothedDepth{ 0.0f };    // profondeur dynamique normalisée [0..1]
+    bool  dynNotchCoeffsStale{ true };      // forcer recalcul si détection a changé
+
     // --- ÉTAT HPF SIDECHAIN DE-ESS (persistant entre les blocs) ---
     double deEssHpZ1[2]{ 0.0, 0.0 }, deEssHpZ2[2]{ 0.0, 0.0 };
+    // Bande de référence large (Q=0.7, même centre) pour le ratio spectral Weiss-style
+    double deEssRefZ1[2]{ 0.0, 0.0 }, deEssRefZ2[2]{ 0.0, 0.0 };
 
     // --- MÉMOIRES : MODULE CLEAN (GATE + DE-ESS) ---
     double cleanShelfZ1[2]{ 0.0, 0.0 }, cleanShelfZ2[2]{ 0.0, 0.0 };
@@ -126,6 +168,12 @@ private:
     float revBandFast[3][2]{};   // enveloppe rapide (transitoires)
     float revBandSlow[3][2]{};   // enveloppe lente (queue de réverb)
 
+    // --- GATE LOOKAHEAD (3ms, anticipation ouverture) ---
+    static constexpr int GATE_LOOKAHEAD_MAX = 512;
+    float gateLookahead[2][GATE_LOOKAHEAD_MAX]{};
+    int   gateLookaheadWrite[2]{ 0, 0 };
+    int   gateLookaheadLen{ 132 }; // recalculé dans prepareToPlay
+
     // --- DE-ESS : LOOK-AHEAD + SEUIL ADAPTATIF ---
     static constexpr int DEESS_LOOKAHEAD_MAX = 512;
     float deEssLookahead[2][DEESS_LOOKAHEAD_MAX]{};
@@ -137,11 +185,30 @@ private:
     float reverbEnv[2]{ 0.0f, 0.0f };
     float reverbEnvSlow[2]{ 0.0f, 0.0f };
 
+    // --- DE-REV : TRANSIENT PRESERVATION (détecteur d'onset vocal + hold counter) ---
+    float revTransientEnv[2]{ 0.f, 0.f };
+    int   revTransientHold[2]{ 0, 0 };
+
     // --- COEFFS ET MÉMOIRES : MODULE AIR & OUTPUT ---
     double airShelfZ1[2]{ 0.0, 0.0 }, airShelfZ2[2]{ 0.0, 0.0 };
     // Filtre HPF du chemin Heat (parallèle, indépendant du shelf)
     double heatHPZ1[2]{ 0.0, 0.0 }, heatHPZ2[2]{ 0.0, 0.0 };
     float smoothedOutputGain[2]{ 1.0f, 1.0f };
+
+    // --- DÉTECTEUR PLOSIVES (LP 250 Hz + dual envelope) ---
+    double plosiveLPZ1[2]{}, plosiveLPZ2[2]{};
+    float  plosiveFastEnv[2]{}, plosiveSlowEnv[2]{};
+    double plosiveLPB0{}, plosiveLPB1{}, plosiveLPB2{}, plosiveLPA1{}, plosiveLPA2{};
+    float  plosiveFastAtkCoef{ 0.99f }, plosiveFastRelCoef{ 0.998f };
+    float  plosiveSlowAtkCoef{ 0.999f }, plosiveSlowRelCoef{ 0.9998f };
+
+    // --- TRANSIENT SHAPER AIR (dual envelope follower) ---
+    float airFastEnv[2]{ 0.0f, 0.0f };
+    float airSlowEnv[2]{ 0.0f, 0.0f };
+    float airShapeFastAtkCoef{ 0.9777f };
+    float airShapeFastRelCoef{ 0.9977f };
+    float airShapeSlowAtkCoef{ 0.9985f };
+    float airShapeSlowRelCoef{ 0.9997f };
 
     // --- NR CEDAR 6 BANDES : banc de filtres LP complémentaires ---
     double nrSplitZ1[5][2]{};

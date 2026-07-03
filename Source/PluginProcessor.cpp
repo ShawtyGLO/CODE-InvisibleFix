@@ -54,9 +54,14 @@ InvisibleFixAudioProcessor::InvisibleFixAudioProcessor()
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)
 #endif
     ),
-    apvts(*this, nullptr, "Parameters", createParameterLayout())
+    apvts(*this, &undoManager, "Parameters", createParameterLayout())
 #endif
 {
+    // Chaque geste (mouseUp sur slider, clic bouton) = une étape undo indépendante
+    undoManager.setMaxNumberOfStoredUnits(50, 0);
+    buildPresetList();
+    currentPresetName      = presetNames.empty() ? "Init" : presetNames[0];
+    currentPresetIsFactory = true;
 }
 
 InvisibleFixAudioProcessor::~InvisibleFixAudioProcessor() {}
@@ -66,11 +71,7 @@ bool InvisibleFixAudioProcessor::acceptsMidi() const { return false; }
 bool InvisibleFixAudioProcessor::producesMidi() const { return false; }
 bool InvisibleFixAudioProcessor::isMidiEffect() const { return false; }
 double InvisibleFixAudioProcessor::getTailLengthSeconds() const { return 0.0; }
-int InvisibleFixAudioProcessor::getNumPrograms() { return 1; }
-int InvisibleFixAudioProcessor::getCurrentProgram() { return 0; }
-void InvisibleFixAudioProcessor::setCurrentProgram(int) {}
-const juce::String InvisibleFixAudioProcessor::getProgramName(int) { return {}; }
-void InvisibleFixAudioProcessor::changeProgramName(int, const juce::String&) {}
+// getNumPrograms / setCurrentProgram / etc. → implémentés dans la section Preset Manager
 
 void InvisibleFixAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
@@ -100,11 +101,16 @@ void InvisibleFixAudioProcessor::prepareToPlay(double sampleRate, int samplesPer
         for (int s = 0; s < 2; ++s) { revSplitZ1[s][ch] = 0.0; revSplitZ2[s][ch] = 0.0; }
         revScHPZ1[ch] = revScHPZ2[ch] = revScLPZ1[ch] = revScLPZ2[ch] = 0.0;
         for (int b = 0; b < 3; ++b) { revBandFast[b][ch] = 0.0f; revBandSlow[b][ch] = 0.0f; }
+        revTransientEnv[ch]  = 0.f;
+        revTransientHold[ch] = 0;
+        if (ch == 0) for (int b = 0; b < 3; ++b) { revBandLiveEnergy[b].store(0.f); revBandLiveGR[b].store(1.f); }
 
-        // De-Ess look-ahead + adaptatif
+        // De-Ess look-ahead + adaptatif + reference band
         deEssLookaheadWrite[ch] = 0;
         deEssAdaptEnv[ch] = 0.0f;
         std::memset(deEssLookahead[ch], 0, sizeof(float) * DEESS_LOOKAHEAD_MAX);
+        deEssHpZ1[ch] = deEssHpZ2[ch] = 0.0;
+        deEssRefZ1[ch] = deEssRefZ2[ch] = 0.0;
 
         rmsWritePos[ch] = 0;
         rmsSumSq[ch]    = 0.0f;
@@ -116,6 +122,8 @@ void InvisibleFixAudioProcessor::prepareToPlay(double sampleRate, int samplesPer
         airShelfZ1[ch] = 0.0; airShelfZ2[ch] = 0.0;
         heatHPZ1[ch]  = 0.0; heatHPZ2[ch]  = 0.0;
         smoothedOutputGain[ch] = 1.0f;
+        airFastEnv[ch] = 0.0f;
+        airSlowEnv[ch] = 0.0f;
 
         for (int s = 0; s < 5; ++s) { nrSplitZ1[s][ch] = 0.0; nrSplitZ2[s][ch] = 0.0; }
         for (int b = 0; b < 6; ++b) {
@@ -135,7 +143,53 @@ void InvisibleFixAudioProcessor::prepareToPlay(double sampleRate, int samplesPer
 
     deEssLookaheadLen = juce::jlimit(1, DEESS_LOOKAHEAD_MAX - 1,
                                      (int)(0.002f * (float)currentSampleRate));
+
+    // Gate lookahead : 3ms
+    gateLookaheadLen = juce::jlimit(1, GATE_LOOKAHEAD_MAX - 1,
+                                    (int)(0.003 * sampleRate));
+    for (int ch = 0; ch < 2; ++ch) {
+        std::memset(gateLookahead[ch], 0, sizeof(float) * GATE_LOOKAHEAD_MAX);
+        gateLookaheadWrite[ch] = 0;
+    }
+    // Latence totale = De-Ess lookahead + Gate lookahead
+    setLatencySamples(deEssLookaheadLen + gateLookaheadLen);
     nrWindowPeriod = juce::jmax(1024, (int)(0.5f * (float)currentSampleRate));
+
+    // Coefficients du détecteur plosives (LP 250 Hz + enveloppes)
+    {
+        double sr2 = currentSampleRate;
+        double wc  = 2.0 * juce::MathConstants<double>::pi * 250.0 / sr2;
+        double cosW = std::cos(wc);
+        double alph = std::sin(wc) / (2.0 * 0.707);
+        double a0   = 1.0 + alph;
+        plosiveLPB0 = (1.0 - cosW) * 0.5 / a0;
+        plosiveLPB1 = (1.0 - cosW)       / a0;
+        plosiveLPB2 = (1.0 - cosW) * 0.5 / a0;
+        plosiveLPA1 = -2.0 * cosW        / a0;
+        plosiveLPA2 = (1.0 - alph)       / a0;
+        float fsr = (float)sr2;
+        plosiveFastAtkCoef = std::exp(-1.0f / (0.002f * fsr));
+        plosiveFastRelCoef = std::exp(-1.0f / (0.025f * fsr));
+        plosiveSlowAtkCoef = std::exp(-1.0f / (0.060f * fsr));
+        plosiveSlowRelCoef = std::exp(-1.0f / (0.250f * fsr));
+        for (int ch = 0; ch < 2; ++ch) {
+            plosiveLPZ1[ch] = plosiveLPZ2[ch] = 0.0;
+            plosiveFastEnv[ch] = plosiveSlowEnv[ch] = 0.0f;
+        }
+    }
+
+    // Coefficients du transient shaper Air (dépendent du sample rate)
+    float sr = (float)currentSampleRate;
+    airShapeFastAtkCoef = std::exp(-1.0f / (0.001f * sr));
+    airShapeFastRelCoef = std::exp(-1.0f / (0.010f * sr));
+    airShapeSlowAtkCoef = std::exp(-1.0f / (0.015f * sr));
+    airShapeSlowRelCoef = std::exp(-1.0f / (0.080f * sr));
+
+    // Initialiser le suivi de freq Room depuis le parametre courant (evite cold start a 440 Hz)
+    float initFreq = *apvts.getRawParameterValue("roomNotchFreq");
+    dynNotchSmoothedFreq  = initFreq;
+    lastRoomFreq          = -999.0f; // force recalcul des coefficients au premier bloc
+    dynNotchCoeffsStale   = true;
 }
 
 void InvisibleFixAudioProcessor::releaseResources() {}
@@ -213,6 +267,10 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear(i, 0, buffer.getNumSamples());
 
+    // ── Bypass global : passe l'audio sans traitement ─────────────────────────
+    if (globalBypassActive.load())
+        return;
+
     // --- LECTURE DES PARAMÈTRES DE FAÇADE ---
     float knobClean = *apvts.getRawParameterValue("clean");
     float knobDeEss = *apvts.getRawParameterValue("deess");
@@ -220,6 +278,26 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
     float knobReverb = *apvts.getRawParameterValue("reverb");
     float knobAir = *apvts.getRawParameterValue("air");
     float knobOutputGain = *apvts.getRawParameterValue("outputGain");
+    float knobInputGain  = *apvts.getRawParameterValue("inputGain");
+    float inputGainLin   = juce::Decibels::decibelsToGain(knobInputGain);
+
+    // Appliquer le gain d'entrée avant tout traitement + mesurer le niveau
+    float inputPeak = 0.f;
+    for (int ch = 0; ch < totalNumInputChannels; ++ch)
+    {
+        auto* d = buffer.getWritePointer(ch);
+        for (int s = 0; s < buffer.getNumSamples(); ++s)
+        {
+            d[s] *= inputGainLin;
+            inputPeak = std::max(inputPeak, std::abs(d[s]));
+        }
+    }
+    // Decay exponentiel : retient le pic ~200ms
+    {
+        float prev = inputLevelDisplay.load();
+        float decay = std::exp(-1.f / (0.200f * (float)currentSampleRate / (float)buffer.getNumSamples()));
+        inputLevelDisplay.store(std::max(inputPeak, prev * decay));
+    }
 
     // --- PARAMÈTRES AVANCÉS ---
     bool cleanBypass   = *apvts.getRawParameterValue("cleanBypass") > 0.5f;
@@ -244,19 +322,148 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
     float advGateThresholdDB = *apvts.getRawParameterValue("cleanGateThreshold");
     float advGateAttack = *apvts.getRawParameterValue("cleanGateAttack");
     float advGateHold = *apvts.getRawParameterValue("cleanGateHold");
+    float plosiveProtect = *apvts.getRawParameterValue("cleanPlosiveProtect");
     float advDeEssThreshDB = *apvts.getRawParameterValue("deEssThreshold");
     float advDeEssDetectRatio = *apvts.getRawParameterValue("deEssDetectRatio");
     float advAirDrive = *apvts.getRawParameterValue("airDrive");
+    float advAirShape = *apvts.getRawParameterValue("airShape");
+    float nrArtifactBlend = *apvts.getRawParameterValue("nrArtifactBlend");
+    bool  liveModeActive  = *apvts.getRawParameterValue("liveMode")   > 0.5f;
+    bool  nrBypass        = *apvts.getRawParameterValue("nrBypass")   > 0.5f;
+    bool  gateBypass      = *apvts.getRawParameterValue("gateBypass") > 0.5f;
+    float deRevBandIntensity[3] = {
+        *apvts.getRawParameterValue("deRevBandLF"),
+        *apvts.getRawParameterValue("deRevBandMF"),
+        *apvts.getRawParameterValue("deRevBandHF")
+    };
+    float deRevThresh[3] = {
+        *apvts.getRawParameterValue("deRevThreshLF"),
+        *apvts.getRawParameterValue("deRevThreshMF"),
+        *apvts.getRawParameterValue("deRevThreshHF")
+    };
+    float deRevFloor = *apvts.getRawParameterValue("deRevFloor");
+    float revTransAtkCoef  = 1.f - std::exp(-1.f / (0.001f * (float)currentSampleRate));
+    float revTransRelCoef  = 1.f - std::exp(-1.f / (0.080f * (float)currentSampleRate));
+    int   revTransHoldLen  = (int)(0.020f * (float)currentSampleRate);
 
-    float currentRoomFreq = *apvts.getRawParameterValue("roomNotchFreq");
-    float currentRoomQ = *apvts.getRawParameterValue("roomNotchQ");
-    if ((knobRoom > 0.001f || roomDelta) &&
-        (knobRoom != lastRoomValue || currentRoomFreq != lastRoomFreq || currentRoomQ != lastRoomQ))
+    // Mise à jour latence déclarée au DAW si mode LIVE/HQ change
+    if (liveModeActive != lastLiveMode)
     {
-        updateRoomCoefficients(knobRoom);
-        lastRoomValue = knobRoom;
-        lastRoomFreq = currentRoomFreq;
-        lastRoomQ = currentRoomQ;
+        lastLiveMode = liveModeActive;
+        setLatencySamples(liveModeActive ? 0 : deEssLookaheadLen + gateLookaheadLen);
+    }
+
+    float currentRoomQ = *apvts.getRawParameterValue("roomNotchQ");
+
+    // ── Notch hybride : freq tracking lisse + profondeur dynamique chirurgicale ──
+    if (knobRoom > 0.001f || roomDelta)
+    {
+        float sr = (float)currentSampleRate;
+        float manualFreq = *apvts.getRawParameterValue("roomNotchFreq");
+
+        // --- 1. Peak detection dans ±15% de manualFreq ---
+        // Le slider est un "aimant" : le système trouve le pic exact autour de lui
+        float searchLo   = manualFreq * 0.85f;
+        float searchHi   = manualFreq * 1.15f;
+        int binSearchLo  = juce::jmax(1, (int)(searchLo * (float)fftSize / sr));
+        int binSearchHi  = juce::jmin(fftSize / 2 - 1, (int)(searchHi * (float)fftSize / sr));
+
+        float peakMag    = 0.0f;
+        int   peakBin    = juce::jlimit(1, fftSize / 2 - 1,
+                                        (int)(manualFreq * (float)fftSize / sr));
+        for (int b = binSearchLo; b <= binSearchHi; ++b)
+        {
+            if (inputFftMagnitudes[b] > peakMag)
+            {
+                peakMag = inputFftMagnitudes[b];
+                peakBin = b;
+            }
+        }
+        float detectedFreq = (float)peakBin * sr / (float)fftSize;
+
+        // --- 2. Suivi de fréquence lisse (~1-2s pour traverser la zone) ---
+        // Évite les sauts brusques de fréquence qui créent des artéfacts
+        dynNotchSmoothedFreq = dynNotchSmoothedFreq * 0.992f + detectedFreq * 0.008f;
+        float trackedFreq = dynNotchSmoothedFreq;
+
+        // --- 3. Proéminence autour de la fréquence trackée ---
+        int binCenter = juce::jlimit(1, fftSize / 2 - 1,
+                                     (int)(trackedFreq * (float)fftSize / sr));
+        int halfBW    = juce::jmax(1, (int)(binCenter / (float)currentRoomQ));
+        int binLo     = juce::jmax(1, binCenter - halfBW);
+        int binHi     = juce::jmin(fftSize / 2 - 1, binCenter + halfBW);
+
+        float bandEnergy = 0.0f;
+        for (int b = binLo; b <= binHi; ++b)
+            bandEnergy += inputFftMagnitudes[b];
+        bandEnergy /= (float)(binHi - binLo + 1);
+
+        int wLo = juce::jmax(1, (int)(80.0f   * (float)fftSize / sr));
+        int wHi = juce::jmin(fftSize / 2 - 1, (int)(1200.0f * (float)fftSize / sr));
+        float wideEnergy = 0.0f;
+        for (int b = wLo; b <= wHi; ++b) wideEnergy += inputFftMagnitudes[b];
+        wideEnergy /= (float)(wHi - wLo + 1);
+
+        // --- 4. Profondeur chirurgicale ---
+        // Seuil 1.5 (vs 1.2) : déclenche uniquement sur les vraies résonances
+        // Pente /3.0 (vs /5.0) : coupe franchement quand c'est bien présent
+        float prominence  = (wideEnergy > 1e-12f) ? (bandEnergy / (wideEnergy + 1e-12f)) : 1.0f;
+        float targetDepth = juce::jlimit(0.0f, 1.0f, (prominence - 1.2f) / 2.0f);
+
+        // Lissage asymétrique : attaque rapide (capte vite), release lent (évite pompage)
+        float smoothCoef  = (targetDepth > dynNotchSmoothedDepth) ? 0.970f : 0.985f;
+        dynNotchSmoothedDepth = dynNotchSmoothedDepth * smoothCoef
+                              + targetDepth * (1.0f - smoothCoef);
+
+        // Profondeur effective — auto-depth sans plancher + multiplicateur boost
+        float roomDepthBoost = *apvts.getRawParameterValue("roomDepthBoost");
+        float effectiveDepth = knobRoom * dynNotchSmoothedDepth;
+        float effectiveQ     = (float)currentRoomQ;
+
+        // Recalcul des coefficients si freq ou depth ont bougé
+        float freqDelta  = std::abs(trackedFreq - lastRoomFreq);
+        float depthDelta = std::abs(effectiveDepth - lastRoomValue);
+        if (freqDelta > 1.0f || depthDelta > 0.003f || dynNotchCoeffsStale)
+        {
+            double fc    = (double)trackedFreq;
+            double Q     = (double)effectiveQ;
+            // Profondeur : -24 dB × effectiveDepth × boost, plafonné à -30 dB
+            double maxDB = -24.0 * (double)effectiveDepth * (double)roomDepthBoost;
+            maxDB = juce::jlimit(-30.0, 0.0, maxDB);
+            double A = std::pow(10.0, maxDB / 40.0);
+            double w0 = juce::MathConstants<double>::twoPi * fc / currentSampleRate;
+            double cosW = std::cos(w0), sinW = std::sin(w0);
+            double alpha = sinW / (2.0 * Q);
+            double b0=1.0+alpha*A, b1=-2.0*cosW, b2=1.0-alpha*A;
+            double a0=1.0+alpha/A, a2=1.0-alpha/A;
+            notchB0=b0/a0; notchB1=b1/a0; notchB2=b2/a0;
+            notchA1=b1/a0; notchA2=a2/a0;   // a1 = b1 normalisé
+
+            // Passe-bande delta (même fc/Q)
+            double alphaBP = sinW / (2.0 * Q);
+            double bpDen = 1.0 + alphaBP;
+            notchBPB0= alphaBP / bpDen; notchBPB1=0.0; notchBPB2=-alphaBP / bpDen;
+            notchBPA1=-2.0*cosW / bpDen; notchBPA2=(1.0-alphaBP)/bpDen;
+
+            // Shelf de compensation (HPF doux à 3 kHz)
+            double shGainDB = -maxDB * 0.15;
+            double Ash = std::pow(10.0, shGainDB / 40.0);
+            double w0s = juce::MathConstants<double>::twoPi * 3000.0 / currentSampleRate;
+            double cosS=std::cos(w0s), sinS=std::sin(w0s);
+            double alphaS = sinS/2.0*std::sqrt((Ash+1.0/Ash)*(1.0/0.707-1.0)+2.0);
+            double sb0=Ash*((Ash+1)+(Ash-1)*cosS+2*std::sqrt(Ash)*alphaS);
+            double sb1=-2*Ash*((Ash-1)+(Ash+1)*cosS);
+            double sb2=Ash*((Ash+1)+(Ash-1)*cosS-2*std::sqrt(Ash)*alphaS);
+            double sa0=(Ash+1)-(Ash-1)*cosS+2*std::sqrt(Ash)*alphaS;
+            double sa1=2*((Ash-1)-(Ash+1)*cosS);
+            double sa2=(Ash+1)-(Ash-1)*cosS-2*std::sqrt(Ash)*alphaS;
+            shelfB0=sb0/sa0; shelfB1=sb1/sa0; shelfB2=sb2/sa0;
+            shelfA1=sa1/sa0; shelfA2=sa2/sa0;
+
+            lastRoomFreq  = trackedFreq;
+            lastRoomValue = effectiveDepth;
+            dynNotchCoeffsStale = false;
+        }
     }
 
     // --- CONFIGURATIONS PRÉ-BLOC ---
@@ -298,7 +505,7 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
     float rvFastA[3]={ 1.f-std::exp(-1.f/(0.003f*rvSr)), 1.f-std::exp(-1.f/(0.001f*rvSr)), 1.f-std::exp(-1.f/(0.0005f*rvSr)) };
     float rvFastR[3]={ 1.f-std::exp(-1.f/(0.080f*rvSr)), 1.f-std::exp(-1.f/(0.035f*rvSr)), 1.f-std::exp(-1.f/(0.015f*rvSr)) };
     float rvSlowA[3]={ 1.f-std::exp(-1.f/(0.015f*rvSr)), 1.f-std::exp(-1.f/(0.005f*rvSr)), 1.f-std::exp(-1.f/(0.002f*rvSr)) };
-    float rvSlowR[3]={ 1.f-std::exp(-1.f/(0.500f*rvSr)), 1.f-std::exp(-1.f/(0.200f*rvSr)), 1.f-std::exp(-1.f/(0.080f*rvSr)) };
+    float rvSlowR[3]={ 1.f-std::exp(-1.f/(1.000f*rvSr)), 1.f-std::exp(-1.f/(0.600f*rvSr)), 1.f-std::exp(-1.f/(0.250f*rvSr)) };
 
     // De-Ess : constante du seuil adaptatif (slow follower ~2s)
     float deEssAdaptCoef = 1.0f - std::exp(-1.0f / (2.0f * (float)currentSampleRate));
@@ -312,7 +519,7 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
     float nrRatioVal = *apvts.getRawParameterValue("nrRatio");
     float nrFloorDB = *apvts.getRawParameterValue("nrFloor");
     float nrSmoothVal = *apvts.getRawParameterValue("nrSmooth");
-    bool nrActive = (nrAmount > 0.001f && !cleanBypass);
+    bool nrActive = (nrAmount > 0.001f && !cleanBypass && !nrBypass);
 
     // === NR CEDAR 6 BANDES — coefficients LP Butterworth 2nd ordre (recalculés par bloc) ===
     // Coupures : 150 / 500 / 1500 / 4000 / 8000 Hz
@@ -373,18 +580,76 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
     double gsLPA1    = (-2.0 * gsLPcos)          / gsLPA0;
     double gsLPA2    = (1.0 - gsLPalpha)         / gsLPA0;
 
-    // Détecteur De-Ess : passe-bande étroit centré sur deEssFreq
+    // ── Détecteur De-Ess : Q dynamique depuis le slider WIDTH (Weiss style) ─────
+    // advDeEssDetectRatio (slider 0→1) mappé en Q : 0→Q=1.0 (large), 1→Q=10.0 (chirurgical)
+    double deDetectionQ = juce::jlimit(1.0, 10.0, 1.0 + (double)advDeEssDetectRatio * 9.0);
+
     double deDetB0{ 1.0 }, deDetB1{ 0.0 }, deDetB2{ 0.0 }, deDetA1{ 0.0 }, deDetA2{ 0.0 };
+    // Bande de référence large (Q=0.7) — capture le caractère vocal à cette fréquence
+    double deRefB0{ 1.0 }, deRefB1{ 0.0 }, deRefB2{ 0.0 }, deRefA1{ 0.0 }, deRefA2{ 0.0 };
+
     if (knobDeEss > 0.001f && !deessBypass) {
         double sideFreq = juce::jlimit(2000.0, 9000.0, (double)advDeEssFreq);
         double w0d = juce::MathConstants<double>::twoPi * sideFreq / currentSampleRate;
         double cd = std::cos(w0d), sd = std::sin(w0d);
-        double ad = sd / (2.0 * 5.0); // Q=5.0, bande étroite isole la sibilante
-        double b0d = ad, b1d = 0.0, b2d = -ad;
+
+        // Bande étroite : Q dynamique (WIDTH slider)
+        double ad = sd / (2.0 * deDetectionQ);
         double a0d = 1.0 + ad;
-        deDetB0 = b0d / a0d; deDetB1 = b1d / a0d; deDetB2 = b2d / a0d;
+        deDetB0 = ad / a0d; deDetB1 = 0.0; deDetB2 = -ad / a0d;
         deDetA1 = -2.0 * cd / a0d; deDetA2 = (1.0 - ad) / a0d;
+
+        // Bande de référence large (Q=0.7) — même centre, capture la voix à cette zone
+        double ar = sd / (2.0 * 0.7);
+        double a0r = 1.0 + ar;
+        deRefB0 = ar / a0r; deRefB1 = 0.0; deRefB2 = -ar / a0r;
+        deRefA1 = -2.0 * cd / a0r; deRefA2 = (1.0 - ar) / a0r;
     }
+    // ── Précompute De-Ess : trig constants (1× par bloc, pas 44100×) ─────────
+    double deEssSafeFreq = juce::jlimit(4500.0f, 9500.0f, advDeEssFreq);
+    double deEssW0c = juce::MathConstants<double>::twoPi * deEssSafeFreq / currentSampleRate;
+    double deEssCosW = std::cos(deEssW0c);
+    double deEssSinW = std::sin(deEssW0c);
+    double deEssAlphBell = deEssSinW / (2.0 * 3.5);  // bell Q=3.5
+    double deEssAlphShelfBase = deEssSinW / (2.0 * 0.707);  // shelf base
+    // cb1 = ca1 = -2*cosW est constant par bloc en mode bell
+    double deEssCb1Ca1 = -2.0 * deEssCosW;
+
+    // ── Précompute AIR Heat HP : trig constants (1× par bloc) ────────────────
+    double airW0h   = juce::MathConstants<double>::twoPi * (double)advAirFreq / currentSampleRate;
+    double airCosH  = std::cos(airW0h);
+    double airSinH  = std::sin(airW0h);
+    double airAlpH  = airSinH / (2.0 * 0.707);
+    double airHpa0  = 1.0 + airAlpH;
+    double airHpb0n = (1.0 + airCosH) * 0.5  / airHpa0;
+    double airHpb1n = -(1.0 + airCosH)        / airHpa0;
+    double airHpb2n = (1.0 + airCosH) * 0.5  / airHpa0;
+    double airHpa1n = -2.0 * airCosH          / airHpa0;
+    double airHpa2n = (1.0 - airAlpH)         / airHpa0;
+
+    // ── Précompute AIR Shelf : tous les coefficients (1× par bloc) ───────────
+    // Aa et les coefficients shelf sont constants car knobAir et advAirFreq ne
+    // changent pas au sein d'un bloc — les recalculer par sample était inutile.
+    double airShelfb0n{1},airShelfb1n{0},airShelfb2n{0};
+    double airShelfa1n{0},airShelfa2n{0};
+    if (knobAir > 0.001f && !airBypass)
+    {
+        double boost = juce::jlimit(0.0, 9.5, 9.5 * (double)knobAir);
+        double Aa    = std::pow(10.0, boost / 40.0);
+        double cosA  = std::cos(airW0h); // même fréquence que le HP
+        double sinA  = airSinH;
+        double sqrtAa = std::sqrt(Aa);
+        double alpA = sinA / (2.0 * 0.707) * std::sqrt((Aa + 1.0/Aa) * (1.0/0.707 - 1.0) + 2.0);
+        double ab0 = Aa * ((Aa+1.0) + (Aa-1.0)*cosA + 2.0*sqrtAa*alpA);
+        double ab1 = -2.0 * Aa * ((Aa-1.0) + (Aa+1.0)*cosA);
+        double ab2 = Aa * ((Aa+1.0) + (Aa-1.0)*cosA - 2.0*sqrtAa*alpA);
+        double aa0 = (Aa+1.0) - (Aa-1.0)*cosA + 2.0*sqrtAa*alpA;
+        double aa1 = 2.0 * ((Aa-1.0) - (Aa+1.0)*cosA);
+        double aa2 = (Aa+1.0) - (Aa-1.0)*cosA - 2.0*sqrtAa*alpA;
+        airShelfb0n = ab0/aa0; airShelfb1n = ab1/aa0; airShelfb2n = ab2/aa0;
+        airShelfa1n = aa1/aa0; airShelfa2n = aa2/aa0;
+    }
+
     // --- BOUCLE ÉCHANTILLONS ---
     for (int channel = 0; channel < totalNumInputChannels; ++channel)
     {
@@ -417,7 +682,7 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
             // === CLEAN : GATE + NR 3-BANDES ===
             if (!cleanBypass)
             {
-                if (knobClean > 0.001f)
+                if (knobClean > 0.001f && !gateBypass)
                 {
                     // NOTE : currentEnv est RMS filtré 200–3000 Hz.
                     // Les valeurs RMS sont ~3–10 dB sous les valeurs peak équivalentes.
@@ -473,7 +738,34 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
                         }
                     }
 
-                    if (channel == 0) gateIsOpenForDisplay = gateIsOpen[0];
+                    // Plosive protection : LP 250 Hz + dual envelope → force gate open
+                    if (plosiveProtect > 0.001f)
+                    {
+                        double lpOut = plosiveLPB0 * x + plosiveLPZ1[channel];
+                        plosiveLPZ1[channel] = plosiveLPB1 * x - plosiveLPA1 * lpOut + plosiveLPZ2[channel];
+                        plosiveLPZ2[channel] = plosiveLPB2 * x - plosiveLPA2 * lpOut;
+                        float lpAbs = std::abs((float)lpOut);
+                        float fpc = (lpAbs > plosiveFastEnv[channel]) ? plosiveFastAtkCoef : plosiveFastRelCoef;
+                        plosiveFastEnv[channel] = fpc * plosiveFastEnv[channel] + (1.0f - fpc) * lpAbs;
+                        float spc = (lpAbs > plosiveSlowEnv[channel]) ? plosiveSlowAtkCoef : plosiveSlowRelCoef;
+                        plosiveSlowEnv[channel] = spc * plosiveSlowEnv[channel] + (1.0f - spc) * lpAbs;
+                        float pRatio = plosiveFastEnv[channel] / (plosiveSlowEnv[channel] + 1e-6f);
+                        float sensitivity = 1.0f + plosiveProtect * 4.0f;
+                        if (pRatio > sensitivity && plosiveFastEnv[channel] > 0.0005f)
+                        {
+                            gateIsOpen[channel] = true;
+                            gateHoldCounter[channel] = juce::jmax(gateHoldCounter[channel], holdSamples / 4);
+                        }
+                    }
+
+                    if (channel == 0) gateIsOpenForDisplay.store(gateIsOpen[0]);
+
+                    // Stereo linking : canal 1+ suit l'état de détection du canal 0
+                    if (channel > 0 && totalNumInputChannels > 1)
+                    {
+                        gateIsOpen[channel]      = gateIsOpen[0];
+                        gateHoldCounter[channel] = gateHoldCounter[0];
+                    }
 
                     float targetGateGain = 1.0f;
                     if (!gateIsOpen[channel]) {
@@ -485,6 +777,22 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
 
                     float cCoef = (targetGateGain > smoothedGateGain[channel]) ? fastGateAttackCoef : fastGateReleaseCoef;
                     smoothedGateGain[channel] += cCoef * (targetGateGain - smoothedGateGain[channel]);
+
+                    // Lookahead gate : alimenter le buffer toujours; lire en HQ seulement
+                    {
+                        int wp = gateLookaheadWrite[channel];
+                        gateLookahead[channel][wp] = (float)x;
+                        gateLookaheadWrite[channel] = (wp + 1) % GATE_LOOKAHEAD_MAX;
+                        if (!liveModeActive)
+                        {
+                            int rdPos = (gateLookaheadWrite[channel] - gateLookaheadLen - 1 + GATE_LOOKAHEAD_MAX) % GATE_LOOKAHEAD_MAX;
+                            x = (double)gateLookahead[channel][rdPos];
+                        }
+                    }
+
+                    // Capture pré-CLEAN APRÈS le delay lookahead (correction delta = clean residuel uniquement)
+                    preCleanX = x;
+
                     x *= (double)smoothedGateGain[channel];
                 }
 
@@ -579,7 +887,9 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
                         nrBandGain[b][channel]    += smoothCoef * (targetGain - nrBandGain[b][channel]);
                         nrBandPrevEnv[b][channel]  = envLin;
 
-                        float g = 1.0f + (nrBandGain[b][channel] - 1.0f) * nrAmount;
+                        float fullG = 1.0f + (nrBandGain[b][channel] - 1.0f) * nrAmount;
+                        float softG = 1.0f + (nrBandGain[b][channel] - 1.0f) * nrAmount * 0.25f;
+                        float g = fullG + nrArtifactBlend * (softG - fullG);
                         bands[b] *= (double)g;
                     }
                     x = 0.0;
@@ -651,6 +961,14 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
                 revScLPZ2[channel] = rvScLPB2 * scHP - rvScLPA2 * scBP;
                 float scLevel = std::abs((float)scBP);
 
+                // Transient preservation : détection onset vocal → freeze gain 20ms
+                float tCoef = (scLevel > revTransientEnv[channel]) ? revTransAtkCoef : revTransRelCoef;
+                revTransientEnv[channel] = tCoef * revTransientEnv[channel] + (1.f - tCoef) * scLevel;
+                bool isOnset = (scLevel > revTransientEnv[channel] * 1.8f) && (scLevel > 0.0005f);
+                if (isOnset) revTransientHold[channel] = revTransHoldLen;
+                else if (revTransientHold[channel] > 0) --revTransientHold[channel];
+                bool freezeDeRev = (revTransientHold[channel] > 0);
+
                 // Banc 3 bandes (LP complémentaires séquentiels)
                 double rem = x;
                 double rvBands[3];
@@ -671,16 +989,23 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
                     revBandSlow[b][channel] += ((ab > revBandSlow[b][channel]) ? rvSlowA[b] : rvSlowR[b])
                                                * (ab - revBandSlow[b][channel]);
                     float gain = 1.0f;
-                    if (revBandSlow[b][channel] > 1e-5f)
+                    if (revBandSlow[b][channel] > 1e-5f && !freezeDeRev)
                     {
                         float transRatio = juce::jlimit(0.0f, 1.5f,
                             revBandFast[b][channel] / (revBandSlow[b][channel] + 1e-6f));
-                        float tailDepth = juce::jmax(0.0f, 1.0f - transRatio);
-                        // Protection vocale : sidechain élevé → réduction d'aggressivité
+                        float T = juce::jmax(0.01f, deRevThresh[b]);
+                        float tailDepth = (transRatio < T)
+                            ? juce::jmax(0.0f, 1.0f - transRatio / T)
+                            : 0.0f;
                         float voiceGuard = juce::jmin(0.7f,
                             scLevel / (revBandSlow[b][channel] + 1e-6f) * 0.5f);
-                        gain = 1.0f - knobReverb * 0.65f * tailDepth * (1.0f - voiceGuard);
-                        gain = juce::jlimit(0.35f, 1.0f, gain);
+                        gain = 1.0f - deRevBandIntensity[b] * knobReverb * 0.65f * tailDepth * (1.0f - voiceGuard);
+                        gain = juce::jlimit(deRevFloor, 1.0f, gain);
+                    }
+                    if (channel == 0)
+                    {
+                        revBandLiveEnergy[b].store(revBandFast[b][0]);
+                        revBandLiveGR[b].store(gain);
                     }
                     x += rvBands[b] * (double)gain;
                 }
@@ -706,28 +1031,51 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
             // === DE-ESS avec look-ahead 2ms + seuil adaptatif (Orban 764A style) ===
             if (knobDeEss > 0.001f && !deessBypass && !cleanDelta)
             {
-                // Lecture du signal retardé de 2ms
-                int rdPos = (deEssLookaheadWrite[channel] - deEssLookaheadLen - 1 + DEESS_LOOKAHEAD_MAX) % DEESS_LOOKAHEAD_MAX;
-                double xDelayed = (double)deEssLookahead[channel][rdPos];
-                preDeEssX = xDelayed; // delta aligné sur le signal retardé
-                // Sidechain détecte sur x COURANT (non retardé) → look-ahead effectif
-                float rawEnv = std::abs((float)x);
+                // LIVE : pas de délai — HQ : lecture retardée 2ms (look-ahead)
+                double xTarget;
+                if (liveModeActive)
+                {
+                    xTarget = x;
+                }
+                else
+                {
+                    int rdPos = (deEssLookaheadWrite[channel] - deEssLookaheadLen - 1 + DEESS_LOOKAHEAD_MAX) % DEESS_LOOKAHEAD_MAX;
+                    xTarget = (double)deEssLookahead[channel][rdPos];
+                }
+                preDeEssX = xTarget;
+                // ── Détection Weiss-style : ratio spectral étroit/large ────────────
+                // Sidechain sur x COURANT (non retardé) → look-ahead effectif
+
+                // Bande étroite (sibilante) — Q dynamique depuis slider WIDTH
                 double hpDet = deDetB0 * x + deEssHpZ1[channel];
                 deEssHpZ1[channel] = deDetB1 * x - deDetA1 * hpDet + deEssHpZ2[channel];
                 deEssHpZ2[channel] = deDetB2 * x - deDetA2 * hpDet;
                 float deEssEnv = std::abs((float)hpDet);
 
-                // Seuil adaptatif : slow follower du niveau sibilant (~2s, style Orban 764A)
-                // Si la voix est naturellement très sibilante → threshold monte légèrement
+                // Bande de référence large (Q=0.7, même centre) — capture voix/harmoniques
+                double refDet = deRefB0 * x + deEssRefZ1[channel];
+                deEssRefZ1[channel] = deRefB1 * x - deRefA1 * refDet + deEssRefZ2[channel];
+                deEssRefZ2[channel] = deRefB2 * x - deRefA2 * refDet;
+                float deEssRefEnv = std::abs((float)refDet);
+
+                // Ratio spectral : si l'énergie est très concentrée dans la bande étroite
+                // par rapport à la bande large → c'est une sibilante (pas un formant vocal)
+                // Un formant vocal a une énergie répartie → ratio proche de 1
+                // Une sibilante a une énergie très focalisée → ratio > 2.5
+                float spectralRatio = deEssEnv / (deEssRefEnv + 1e-7f);
+
+                // Seuil adaptatif (style Orban 764A) — monte si la voix est naturellement sibilante
                 deEssAdaptEnv[channel] += deEssAdaptCoef * (deEssEnv - deEssAdaptEnv[channel]);
                 float baseThreshLin = juce::Decibels::decibelsToGain(advDeEssThreshDB);
-                float adaptRatio = deEssAdaptEnv[channel] / (baseThreshLin + 1e-7f);
+                float adaptRatio    = deEssAdaptEnv[channel] / (baseThreshLin + 1e-7f);
                 float adaptOffsetDB = juce::jlimit(0.0f, 6.0f,
                     20.0f * std::log10(juce::jmax(1.0f, adaptRatio)) * 0.35f);
                 float deEssThreshLin = juce::Decibels::decibelsToGain(advDeEssThreshDB + adaptOffsetDB);
 
                 float targetCleanGain = 1.0f;
-                if (deEssEnv > 0.0002f && deEssEnv > (rawEnv * advDeEssDetectRatio))
+                // Déclenchement : niveau minimal ET ratio spectral > 2.5 (concentré = sibilante)
+                // Le ratio 2.5 correspond à ~8 dB de différence entre bande étroite et large
+                if (deEssEnv > 0.0002f && spectralRatio > 2.5f)
                 {
                     if (deEssEnv > deEssThreshLin)
                         targetCleanGain = std::pow(deEssThreshLin / deEssEnv, deEssRatio);
@@ -738,28 +1086,26 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
                 smoothedCleanGain[channel] += deEssSmoothCoef * (targetCleanGain - smoothedCleanGain[channel]);
                 float attenDB = juce::jlimit(-20.0f, 0.0f, -20.0f * (1.0f - smoothedCleanGain[channel]) * knobDeEss);
                 double Acl = std::pow(10.0, attenDB / 40.0);
-                double safeDeEssFreq = juce::jlimit(4500.0f, 9500.0f, advDeEssFreq);
-                double w0c = juce::MathConstants<double>::twoPi * safeDeEssFreq / currentSampleRate;
-                double cosW = std::cos(w0c), sinW = std::sin(w0c);
+                // cos/sin précomputés une fois par bloc — économie de ~44100 appels trig/s
                 double cb0, cb1, cb2, ca0, ca1, ca2;
                 if (isBellMode) {
-                    double alphaBell = sinW / (2.0 * 3.5);
-                    cb0 = 1.0 + alphaBell * Acl; cb1 = -2.0 * cosW; cb2 = 1.0 - alphaBell * Acl;
-                    ca0 = 1.0 + alphaBell / Acl; ca1 = -2.0 * cosW; ca2 = 1.0 - alphaBell / Acl;
+                    cb0 = 1.0 + deEssAlphBell * Acl; cb1 = deEssCb1Ca1; cb2 = 1.0 - deEssAlphBell * Acl;
+                    ca0 = 1.0 + deEssAlphBell / Acl; ca1 = deEssCb1Ca1; ca2 = 1.0 - deEssAlphBell / Acl;
                 } else {
-                    double alph = sinW / (2.0 * 0.707) * std::sqrt((Acl + 1.0 / Acl) * (1.0 / 0.707 - 1.0) + 2.0);
-                    cb0 = Acl * ((Acl + 1.0) + (Acl - 1.0) * cosW + 2.0 * std::sqrt(Acl) * alph);
-                    cb1 = -2.0 * Acl * ((Acl - 1.0) + (Acl + 1.0) * cosW);
-                    cb2 = Acl * ((Acl + 1.0) + (Acl - 1.0) * cosW - 2.0 * std::sqrt(Acl) * alph);
-                    ca0 = (Acl + 1.0) - (Acl - 1.0) * cosW + 2.0 * std::sqrt(Acl) * alph;
-                    ca1 = 2.0 * ((Acl - 1.0) - (Acl + 1.0) * cosW);
-                    ca2 = (Acl + 1.0) - (Acl - 1.0) * cosW - 2.0 * std::sqrt(Acl) * alph;
+                    double alph = deEssAlphShelfBase * std::sqrt((Acl + 1.0/Acl) * (1.0/0.707 - 1.0) + 2.0);
+                    double sqrtAcl = std::sqrt(Acl);
+                    cb0 = Acl * ((Acl+1.0) + (Acl-1.0)*deEssCosW + 2.0*sqrtAcl*alph);
+                    cb1 = -2.0 * Acl * ((Acl-1.0) + (Acl+1.0)*deEssCosW);
+                    cb2 = Acl * ((Acl+1.0) + (Acl-1.0)*deEssCosW - 2.0*sqrtAcl*alph);
+                    ca0 = (Acl+1.0) - (Acl-1.0)*deEssCosW + 2.0*sqrtAcl*alph;
+                    ca1 = 2.0 * ((Acl-1.0) - (Acl+1.0)*deEssCosW);
+                    ca2 = (Acl+1.0) - (Acl-1.0)*deEssCosW - 2.0*sqrtAcl*alph;
                 }
                 // Le filtre est appliqué sur xDelayed (signal retardé de 2ms)
                 // La réduction de gain est déjà calculée avant l'arrivée de la sibilance → look-ahead
-                double aDeEssOut = (cb0 / ca0) * xDelayed + cleanShelfZ1[channel];
-                cleanShelfZ1[channel] = (cb1 / ca0) * xDelayed - (ca1 / ca0) * aDeEssOut + cleanShelfZ2[channel];
-                cleanShelfZ2[channel] = (cb2 / ca0) * xDelayed - (ca2 / ca0) * aDeEssOut;
+                double aDeEssOut = (cb0 / ca0) * xTarget + cleanShelfZ1[channel];
+                cleanShelfZ1[channel] = (cb1 / ca0) * xTarget - (ca1 / ca0) * aDeEssOut + cleanShelfZ2[channel];
+                cleanShelfZ2[channel] = (cb2 / ca0) * xTarget - (ca2 / ca0) * aDeEssOut;
                 x = aDeEssOut;
             }
 
@@ -783,44 +1129,79 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
                 if (advAirDrive > 0.001f)
                 {
                     float driveAmt = juce::jlimit(0.0f, 1.0f, advAirDrive);
-                    double w0h = juce::MathConstants<double>::twoPi * (double)advAirFreq / currentSampleRate;
-                    double cosH = std::cos(w0h), sinH = std::sin(w0h);
-                    double alpH = sinH / (2.0 * 0.707);
-                    double hpb0 = (1.0 + cosH) * 0.5,  hpb1 = -(1.0 + cosH), hpb2 = (1.0 + cosH) * 0.5;
-                    double hpa0 = 1.0 + alpH,           hpa1 = -2.0 * cosH,   hpa2 = 1.0 - alpH;
-                    double hpOut = (hpb0 / hpa0) * x + heatHPZ1[channel];
-                    heatHPZ1[channel] = (hpb1 / hpa0) * x - (hpa1 / hpa0) * hpOut + heatHPZ2[channel];
-                    heatHPZ2[channel] = (hpb2 / hpa0) * x - (hpa2 / hpa0) * hpOut;
-                    // Saturation du contenu haute fréquence isolé
+                    double hpOut = airHpb0n * x + heatHPZ1[channel];
+                    heatHPZ1[channel] = airHpb1n * x - airHpa1n * hpOut + heatHPZ2[channel];
+                    heatHPZ2[channel] = airHpb2n * x - airHpa2n * hpOut;
                     float driveScale = 1.0f + driveAmt * 5.0f;
-                    float satIn  = (float)hpOut * driveScale;
-                    float satOut = std::tanh(satIn) / driveScale; // compenser le gain
-                    // Injection des harmoniques générées (différence sat - linéaire = distorsion pure)
-                    heatSignal = (double)((satOut - (float)hpOut) * driveAmt * 0.7f);
+                    float satIn = (float)hpOut * driveScale;
+
+                    int satMode = (int)*apvts.getRawParameterValue("airSatMode");
+                    float satOut;
+                    switch (satMode)
+                    {
+                        case 0: // TRIODE — asymétrique, harmoniques paires (2e dominant)
+                        {
+                            static const float bias = 0.18f;
+                            static const float den  = std::tanh(1.0f + bias) - std::tanh(bias);
+                            satOut = (std::tanh(satIn + bias) - std::tanh(bias)) / (den * driveScale);
+                            break;
+                        }
+                        case 1: // CLASS-A — cubique symétrique, harmoniques impaires (3e dominant)
+                        {
+                            float xc = juce::jlimit(-1.5f, 1.5f, satIn);
+                            satOut = (xc - (xc * xc * xc) / 3.0f) / driveScale;
+                            break;
+                        }
+                        case 2: // TAPE — atan très doux, minimum d'harmoniques (plus transparent)
+                        {
+                            satOut = (2.0f / juce::MathConstants<float>::pi)
+                                     * std::atan(satIn * 1.2f) / driveScale;
+                            break;
+                        }
+                        case 3: // IRON — x/sqrt(1+x²) : genou plus dur que tanh (transformateur)
+                        {
+                            float x2 = satIn * satIn;
+                            satOut = satIn / std::sqrt(1.0f + x2) / driveScale;
+                            break;
+                        }
+                        default:
+                            satOut = std::tanh(satIn) / driveScale;
+                            break;
+                    }
+
+                    heatSignal = (double)((satOut - (float)hpOut) * driveAmt * 1.5f);
                 }
 
-                // === SHELF AIR : boost haute fréquence, indépendant du Heat ===
+                // === SHELF AIR : coefficients précomputés avant la boucle ===
                 if (knobAir > 0.001f)
                 {
-                    float boost = juce::jlimit(0.0f, 9.5f, 9.5f * knobAir);
-                    double Aa = std::pow(10.0, (double)boost / 40.0);
-                    double w0a = juce::MathConstants<double>::twoPi * (double)advAirFreq / currentSampleRate;
-                    double cosA = std::cos(w0a);
-                    double alpA = std::sin(w0a) / (2.0 * 0.707) * std::sqrt((Aa + 1.0 / Aa) * (1.0 / 0.707 - 1.0) + 2.0);
-                    double ab0 = Aa * ((Aa + 1.0) + (Aa - 1.0) * cosA + 2.0 * std::sqrt(Aa) * alpA);
-                    double ab1 = -2.0 * Aa * ((Aa - 1.0) + (Aa + 1.0) * cosA);
-                    double ab2 = Aa * ((Aa + 1.0) + (Aa - 1.0) * cosA - 2.0 * std::sqrt(Aa) * alpA);
-                    double aa0 = (Aa + 1.0) - (Aa - 1.0) * cosA + 2.0 * std::sqrt(Aa) * alpA;
-                    double aa1 = 2.0 * ((Aa - 1.0) - (Aa + 1.0) * cosA);
-                    double aa2 = (Aa + 1.0) - (Aa - 1.0) * cosA - 2.0 * std::sqrt(Aa) * alpA;
-                    double airOut = (ab0 / aa0) * x + airShelfZ1[channel];
-                    airShelfZ1[channel] = (ab1 / aa0) * x - (aa1 / aa0) * airOut + airShelfZ2[channel];
-                    airShelfZ2[channel] = (ab2 / aa0) * x - (aa2 / aa0) * airOut;
+                    double airOut = airShelfb0n * x + airShelfZ1[channel];
+                    airShelfZ1[channel] = airShelfb1n * x - airShelfa1n * airOut + airShelfZ2[channel];
+                    airShelfZ2[channel] = airShelfb2n * x - airShelfa2n * airOut;
                     x = airOut;
                 }
 
                 // Injection Heat après le shelf (harmoniques s'ajoutent au signal final)
                 x += heatSignal;
+
+                // === TRANSIENT SHAPER AIR (bipolar SHAPE knob) ===
+                if (std::abs(advAirShape) > 0.001f)
+                {
+                    float xAbs = (float)std::abs(x);
+                    // Enveloppe rapide (transitoires) — atk 1ms / rel 10ms
+                    float fCoef = (xAbs > airFastEnv[channel]) ? airShapeFastAtkCoef : airShapeFastRelCoef;
+                    airFastEnv[channel] = fCoef * airFastEnv[channel] + (1.0f - fCoef) * xAbs;
+                    // Enveloppe lente (sustain) — atk 15ms / rel 80ms
+                    float sCoef = (xAbs > airSlowEnv[channel]) ? airShapeSlowAtkCoef : airShapeSlowRelCoef;
+                    airSlowEnv[channel] = sCoef * airSlowEnv[channel] + (1.0f - sCoef) * xAbs;
+                    // Contenu transitoire normalisé [0..1]
+                    float transient = (airFastEnv[channel] - airSlowEnv[channel])
+                                    / (airSlowEnv[channel] + 1e-6f);
+                    transient = juce::jlimit(0.0f, 1.0f, transient);
+                    // + SHAPE → boost transitoires, - SHAPE → atténue transitoires
+                    float gain = 1.0f + advAirShape * transient * 1.5f;
+                    x *= (double)juce::jlimit(0.1f, 4.0f, gain);
+                }
             }
 
             // === AIR DELTA : sortie = différence AIR uniquement ===
@@ -834,6 +1215,20 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
             data[sample] = (float)(x * (double)smoothedOutputGain[channel]);
         }
     }
+
+    // Mesure du niveau de sortie (peak mono, après tout traitement)
+    float outputPeak = 0.f;
+    for (int ch = 0; ch < totalNumInputChannels; ++ch)
+    {
+        auto* d = buffer.getReadPointer(ch);
+        for (int s = 0; s < buffer.getNumSamples(); ++s)
+            outputPeak = std::max(outputPeak, std::abs(d[s]));
+    }
+    {
+        float prev = outputLevelDisplay.load();
+        float decay = std::exp(-1.f / (0.200f * (float)currentSampleRate / (float)buffer.getNumSamples()));
+        outputLevelDisplay.store(std::max(outputPeak, prev * decay));
+    }
 }
 
 bool InvisibleFixAudioProcessor::hasEditor() const { return true; }
@@ -842,6 +1237,232 @@ juce::AudioProcessorEditor* InvisibleFixAudioProcessor::createEditor()
 {
     return new InvisibleFixAudioProcessorEditor(*this);
 }
+
+// =============================================================================
+//  PRESET MANAGER
+// =============================================================================
+
+// Chaque preset est une liste de {paramID, valeur réelle (même échelle que le paramètre)}.
+// Les paramètres absents restent à leur valeur par défaut.
+// ─── Tu peux modifier ces valeurs directement pour affiner chaque preset ──────
+
+using ParamOverride = std::pair<juce::String, float>;
+using ParamList     = std::vector<ParamOverride>;
+
+static ParamList getFactoryPresetParams(int index)
+{
+    switch (index)
+    {
+    // ── 0 : Init ─────────────────────────────────────────────────────────────
+    case 0:
+        return {}; // tout par défaut
+
+    // ── 1 : Podcast Voix Proche ───────────────────────────────────────────────
+    // Correction équilibrée pour micro de table/headset en voix de près
+    case 1:
+        return {
+            { "clean",              0.50f }, { "deess",            0.42f },
+            { "room",               0.20f }, { "reverb",           0.18f },
+            { "air",                0.18f },
+            { "cleanGateThreshold",-32.0f }, { "cleanGateFloor",  -42.0f },
+            { "cleanGateAttack",    0.004f}, { "cleanGateHold",    0.040f},
+            { "cleanRelease",       0.18f },
+            { "nrThreshold",       -52.0f }, { "nrRatio",           2.5f },
+            { "nrFloor",           -14.0f }, { "nrSmooth",          0.025f},
+            { "deEssFreq",       7200.0f  }, { "deEssThreshold",  -36.0f },
+            { "deEssIntensity",     1.0f  }, { "deEssDetectRatio",  0.15f },
+            { "airFreq",        11000.0f  },
+        };
+
+    // ── 2 : Live Streaming ────────────────────────────────────────────────────
+    // Gate serré et réactif, NR fort, de-ess agressif pour conditions live
+    case 2:
+        return {
+            { "clean",              0.68f }, { "deess",            0.58f },
+            { "room",               0.10f }, { "reverb",           0.32f },
+            { "air",                0.28f },
+            { "cleanGateThreshold",-26.0f }, { "cleanGateFloor",  -46.0f },
+            { "cleanGateAttack",    0.002f}, { "cleanGateHold",    0.020f},
+            { "cleanRelease",       0.12f },
+            { "nrThreshold",       -45.0f }, { "nrRatio",           4.0f },
+            { "nrFloor",           -16.0f }, { "nrSmooth",          0.015f},
+            { "deEssFreq",       7000.0f  }, { "deEssThreshold",  -32.0f },
+            { "deEssIntensity",     1.2f  }, { "deEssDetectRatio",  0.18f },
+            { "airFreq",        10000.0f  },
+        };
+
+    // ── 3 : Voix Room ─────────────────────────────────────────────────────────
+    // Correction pièce prononcée : room notch + de-rev poussés
+    case 3:
+        return {
+            { "clean",              0.32f }, { "deess",            0.22f },
+            { "room",               0.80f }, { "reverb",           0.72f },
+            { "air",                0.12f },
+            { "cleanGateThreshold",-36.0f }, { "cleanGateFloor",  -50.0f },
+            { "cleanGateAttack",    0.005f}, { "cleanGateHold",    0.050f},
+            { "cleanRelease",       0.25f },
+            { "nrThreshold",       -58.0f }, { "nrRatio",           2.0f },
+            { "nrFloor",           -12.0f }, { "nrSmooth",          0.030f},
+            { "deEssFreq",       6500.0f  }, { "deEssThreshold",  -40.0f },
+            { "deEssIntensity",     0.8f  }, { "deEssDetectRatio",  0.12f },
+            { "roomNotchFreq",    440.0f  }, { "roomNotchQ",         2.5f },
+            { "airFreq",        11000.0f  },
+        };
+
+    // ── 4 : Voix Chuchotée / ASMR ────────────────────────────────────────────
+    // Gate lent et très sensible, NR délicat, de-ess minimal
+    case 4:
+        return {
+            { "clean",              0.58f }, { "deess",            0.12f },
+            { "room",               0.18f }, { "reverb",           0.22f },
+            { "air",                0.22f },
+            { "cleanGateThreshold",-48.0f }, { "cleanGateFloor",  -62.0f },
+            { "cleanGateAttack",    0.008f}, { "cleanGateHold",    0.080f},
+            { "cleanRelease",       0.45f },
+            { "nrThreshold",       -42.0f }, { "nrRatio",           2.0f },
+            { "nrFloor",           -10.0f }, { "nrSmooth",          0.050f},
+            { "deEssFreq",       8000.0f  }, { "deEssThreshold",  -44.0f },
+            { "deEssIntensity",     0.5f  }, { "deEssDetectRatio",  0.10f },
+            { "airFreq",        12000.0f  },
+        };
+
+    default:
+        return {};
+    }
+}
+
+static const char* getFactoryPresetName(int i)
+{
+    switch (i) {
+    case 0:  return "Init";
+    case 1:  return "Podcast Voix Proche";
+    case 2:  return "Live Streaming";
+    case 3:  return "Voix Room";
+    case 4:  return "Voix Chuchotee / ASMR";
+    default: return "Preset";
+    }
+}
+
+juce::File InvisibleFixAudioProcessor::getUserPresetsDir() const
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                       .getChildFile("InvisibleFix").getChildFile("Presets");
+}
+
+void InvisibleFixAudioProcessor::buildPresetList()
+{
+    presetNames.clear();
+    presetIsFactory.clear();
+    userPresetFiles.clear();
+
+    for (int i = 0; i < NUM_FACTORY_PRESETS; ++i)
+    {
+        presetNames.push_back(getFactoryPresetName(i));
+        presetIsFactory.push_back(true);
+    }
+
+    auto dir = getUserPresetsDir();
+    if (dir.isDirectory())
+    {
+        for (auto& f : dir.findChildFiles(juce::File::findFiles, false, "*.ifx"))
+        {
+            presetNames.push_back(f.getFileNameWithoutExtension());
+            presetIsFactory.push_back(false);
+            userPresetFiles.push_back(f);
+        }
+    }
+}
+
+void InvisibleFixAudioProcessor::loadPreset(int index)
+{
+    if (index < 0 || index >= (int)presetNames.size()) return;
+
+    if (presetIsFactory[index])
+    {
+        // Remettre tous les paramètres audio à leur valeur par défaut d'abord
+        for (auto* p : apvts.processor.getParameters())
+        {
+            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*>(p))
+                rp->setValueNotifyingHost(rp->getDefaultValue());
+        }
+
+        // Appliquer les overrides du preset (valeurs réelles → normalisées)
+        auto params = getFactoryPresetParams(index);
+        for (auto& [id, val] : params)
+        {
+            if (auto* p = apvts.getParameter(id))
+            {
+                if (auto* rp = dynamic_cast<juce::RangedAudioParameter*>(p))
+                {
+                    auto& r   = rp->getNormalisableRange();
+                    float norm = juce::jlimit(0.0f, 1.0f, (val - r.start) / (r.end - r.start));
+                    rp->setValueNotifyingHost(norm);
+                }
+            }
+        }
+    }
+    else
+    {
+        // Preset utilisateur : charger depuis le fichier XML
+        int userIdx = index - NUM_FACTORY_PRESETS;
+        if (userIdx >= 0 && userIdx < (int)userPresetFiles.size())
+        {
+            auto xmlStr = userPresetFiles[userIdx].loadFileAsString();
+            if (auto xml = juce::XmlDocument::parse(xmlStr))
+            {
+                auto vt = juce::ValueTree::fromXml(*xml);
+                if (vt.isValid())
+                    apvts.replaceState(vt);
+            }
+        }
+    }
+
+    currentPresetIndex    = index;
+    currentPresetName     = presetNames[index];
+    currentPresetIsFactory = presetIsFactory[index];
+}
+
+void InvisibleFixAudioProcessor::savePreset(const juce::String& name)
+{
+    auto dir = getUserPresetsDir();
+    dir.createDirectory();
+    auto file = dir.getChildFile(name + ".ifx");
+
+    auto state = apvts.copyState();
+    if (auto xml = state.createXml())
+        xml->writeToFile(file, {});
+
+    buildPresetList();
+
+    // Trouver le preset qu'on vient de sauvegarder et le marquer courant
+    for (int i = 0; i < (int)presetNames.size(); ++i)
+        if (presetNames[i] == name) { currentPresetIndex = i; break; }
+
+    currentPresetName      = name;
+    currentPresetIsFactory = false;
+}
+
+void InvisibleFixAudioProcessor::deleteUserPreset(int index)
+{
+    if (index < NUM_FACTORY_PRESETS || index >= (int)presetNames.size()) return;
+    int userIdx = index - NUM_FACTORY_PRESETS;
+    if (userIdx < (int)userPresetFiles.size())
+        userPresetFiles[userIdx].deleteFile();
+    buildPresetList();
+    if (currentPresetIndex >= (int)presetNames.size())
+        currentPresetIndex = 0;
+}
+
+// Surcharge des méthodes programme JUCE (navigation DAW)
+int            InvisibleFixAudioProcessor::getNumPrograms()        { return (int)presetNames.size(); }
+int            InvisibleFixAudioProcessor::getCurrentProgram()     { return currentPresetIndex; }
+void           InvisibleFixAudioProcessor::setCurrentProgram(int i){ loadPreset(i); }
+const juce::String InvisibleFixAudioProcessor::getProgramName(int i)
+{
+    if (i >= 0 && i < (int)presetNames.size()) return presetNames[i];
+    return {};
+}
+void InvisibleFixAudioProcessor::changeProgramName(int, const juce::String&) {}
 
 void InvisibleFixAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
@@ -869,7 +1490,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout InvisibleFixAudioProcessor::
 
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID{ "outputGain", 1 }, "Output Gain",
-        juce::NormalisableRange<float>(-3.0f, 3.0f, 0.01f), 0.0f));
+        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "inputGain", 1 }, "Input Gain",
+        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f));
 
     // Bypass modules (5)
     layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{ "cleanBypass", 1 }, "Clean Bypass", false));
@@ -907,12 +1531,33 @@ juce::AudioProcessorValueTreeState::ParameterLayout InvisibleFixAudioProcessor::
 
     // Air Advanced
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "airDrive", 1 }, "Air Drive Saturation", 0.0f, 1.0f, 0.0f));
+    layout.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID{ "airSatMode", 1 }, "Air Sat Mode", 0, 3, 0));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "airShape", 1 }, "Air Transient Shape",
+        juce::NormalisableRange<float>(-1.0f, 1.0f, 0.01f), 0.0f));
 
     // Room Advanced
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "roomNotchFreq", 1 }, "Room Notch Freq", 150.0f, 1200.0f, 440.0f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "roomNotchQ", 1 }, "Room Notch Q", 0.8f, 7.0f, 2.2f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "roomDepthBoost", 1 }, "Room Depth Boost", 0.5f, 2.5f, 1.0f));
 
     // NR — Noise Reduction 3-bandes
+    // De-Rev Floor
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "deRevFloor", 1 }, "De-Rev Floor", 0.0f, 0.65f, 0.35f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "deRevBandLF", 1 }, "De-Rev Band LF", 0.0f, 1.0f, 0.35f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "deRevBandMF", 1 }, "De-Rev Band MF", 0.0f, 1.0f, 0.75f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "deRevBandHF", 1 }, "De-Rev Band HF", 0.0f, 1.0f, 1.0f));
+    // Seuils temporels par bande (0=traiter tout, 1=zone directe épargnée, queue profonde seulement)
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "deRevThreshLF", 1 }, "De-Rev Thresh LF", 0.0f, 1.0f, 0.95f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "deRevThreshMF", 1 }, "De-Rev Thresh MF", 0.0f, 1.0f, 0.80f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID{ "deRevThreshHF", 1 }, "De-Rev Thresh HF", 0.0f, 1.0f, 0.65f));
+
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "nrThreshold", 1 }, "NR Threshold",
         juce::NormalisableRange<float>(-80.0f, -10.0f, 0.1f), -40.0f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "nrRatio", 1 }, "NR Ratio", 1.0f, 8.0f, 3.0f));
@@ -920,6 +1565,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout InvisibleFixAudioProcessor::
         juce::NormalisableRange<float>(-80.0f, 0.0f, 0.1f), -12.0f));
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "nrSmooth", 1 }, "NR Smooth",
         juce::NormalisableRange<float>(0.001f, 0.100f, 0.001f), 0.020f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "nrArtifactBlend", 1 }, "NR Artifact Blend", 0.0f, 1.0f, 0.0f));
+
+    // Global LIVE/HQ mode
+    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{ "liveMode", 1 }, "Live Mode", false));
+
+    // Bypass indépendants NR et Gate (dans le module Clean)
+    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{ "nrBypass",   1 }, "NR Bypass",   false));
+    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{ "gateBypass", 1 }, "Gate Bypass", false));
+    // Protection plosives — maintient le gate ouvert sur les transitoires BF
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{ "cleanPlosiveProtect", 1 }, "Plosive Protect", 0.0f, 1.0f, 0.25f));
 
     return layout;
 }

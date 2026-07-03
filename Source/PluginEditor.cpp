@@ -111,18 +111,28 @@ public:
 static BypassButtonLAF bypassBtnLAF;
 
 // =============================================================================
-//  DELTA BUTTON — triangle plus grand, transparent, cyan quand actif
+//  DELTA BUTTON — triangle plus grand, transparent, cyan clignotant quand actif
 // =============================================================================
 class DeltaButtonLAF : public juce::LookAndFeel_V4
 {
 public:
+    bool blinkOn = true;
+
     void drawButtonBackground(juce::Graphics&, juce::Button&,
                                const juce::Colour&, bool, bool) override {}
 
     void drawButtonText(juce::Graphics& g, juce::TextButton& btn, bool, bool) override
     {
-        g.setColour(btn.getToggleState() ? juce::Colour(0xFF13add6)
-                                         : juce::Colour(0xFF94a5a2));
+        if (btn.getToggleState())
+        {
+            auto col = blinkOn ? juce::Colour(0xFF13add6)
+                               : juce::Colour(0xFF13add6).withAlpha(0.20f);
+            g.setColour(col);
+        }
+        else
+        {
+            g.setColour(juce::Colour(0xFF94a5a2));
+        }
         g.setFont(juce::Font(juce::FontOptions(13.0f)));
         g.drawText(btn.getButtonText(), btn.getLocalBounds(), juce::Justification::centred);
     }
@@ -1006,11 +1016,11 @@ public:
                 g.fillRoundedRectangle(trackX, ty - 2.0f, tx - trackX, 4.0f, 2.0f);
             }
 
-            // Thumb blanc + ring teal
+            // Thumb blanc + ring teal (même taille que DeEssAR : 11px)
             g.setColour(juce::Colours::white);
-            g.fillEllipse(tx - 7.0f, ty - 7.0f, 14.0f, 14.0f);
+            g.fillEllipse(tx - 5.5f, ty - 5.5f, 11.0f, 11.0f);
             g.setColour(juce::Colour(0xFF16b3bf));
-            g.drawEllipse(tx - 6.0f, ty - 6.0f, 12.0f, 12.0f, 1.5f);
+            g.drawEllipse(tx - 4.5f, ty - 4.5f, 9.0f, 9.0f, 1.5f);
 
             // Valeur en ms
             float ms = segs[i].p
@@ -1103,7 +1113,8 @@ public:
         const float trackW = W * 0.575f - trackX - 44.0f;
         juce::RangedAudioParameter* ps[3] = { atkParam, holdParam, relParam };
 
-        float newVal = juce::jlimit(0.0f, 1.0f, ((float)e.x - trackX) / trackW);
+        float delta  = ((float)e.x - (float)dragStartX) / trackW;
+        float newVal = juce::jlimit(0.0f, 1.0f, dragStartVal + delta);
         if (ps[dragSeg]) ps[dragSeg]->setValueNotifyingHost(newVal);
         repaint();
     }
@@ -1483,7 +1494,9 @@ public:
                         (double)*apvts.getRawParameterValue("roomNotchFreq"));
         double Q    = juce::jlimit(0.5, 15.0,
                         (double)*apvts.getRawParameterValue("roomNotchQ"));
-        float knobRoom = *apvts.getRawParameterValue("room");
+        float knobRoom      = *apvts.getRawParameterValue("room");
+        float roomBoost     = *apvts.getRawParameterValue("roomDepthBoost");
+        float dynDepthLive  = processor.getRoomDynDepth(); // 0..1 live
         float fcX   = xAtFreq((float)fc);
 
         float sigma = wf * (float)(std::log(1.0 + 1.0 / (2.0 * Q)) / std::log(100.0));
@@ -1491,6 +1504,8 @@ public:
 
         float baseY   = hf * 0.15f;
         float maxDipY = hf * 0.72f;
+        // Profondeur visuelle = ce que fait vraiment le DSP (avec boost)
+        float visualDepth = juce::jmin(1.0f, knobRoom * dynDepthLive * roomBoost);
 
         juce::Path curve;
         bool first = true;
@@ -1498,23 +1513,45 @@ public:
         {
             float dx  = (float)px - fcX;
             float dip = std::exp(-0.5f * (dx / sigma) * (dx / sigma));
-            float py  = baseY + dip * maxDipY * knobRoom;
+            float py  = baseY + dip * maxDipY * juce::jmax(knobRoom * 0.2f, visualDepth);
             if (first) { curve.startNewSubPath((float)px, py); first = false; }
             else         curve.lineTo((float)px, py);
         }
 
+        // Zone retirée : remplissage rouge proportionnel à la réduction active
         {
             juce::Path fill = curve;
             fill.lineTo(wf, baseY);
             fill.lineTo(0.0f, baseY);
             fill.closeSubPath();
-            g.setColour(juce::Colour(0xFF13add6).withAlpha(0.08f));
+            // Couche rouge = ce qui est supprimé (dynamique live)
+            g.setColour(juce::Colour(0xFFff4422).withAlpha(0.08f + dynDepthLive * knobRoom * 0.22f));
+            g.fillPath(fill);
+            // Légère teinte cyan par-dessus (empreinte du filtre)
+            g.setColour(juce::Colour(0xFF13add6).withAlpha(0.05f));
             g.fillPath(fill);
         }
 
-        g.setColour(juce::Colour(0xFF13add6).withAlpha(0.95f));
+        // Courbe principale : cyan si peu de réduction, orange/rouge si forte
+        float hue = juce::jlimit(0.0f, 1.0f, dynDepthLive * knobRoom * roomBoost);
+        juce::Colour curveCol = juce::Colour(0xFF13add6).interpolatedWith(juce::Colour(0xFFff5533), hue * 0.7f);
+        g.setColour(curveCol.withAlpha(0.95f));
         g.strokePath(curve, juce::PathStrokeType(2.0f,
             juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        // Indicateur numérique de réduction effective (dB)
+        {
+            float reductDB = -24.0f * knobRoom * dynDepthLive * roomBoost;
+            reductDB = juce::jlimit(-30.0f, 0.0f, reductDB);
+            if (reductDB < -0.5f)
+            {
+                g.setFont(juce::Font(juce::FontOptions(8.0f)));
+                g.setColour(juce::Colour(0xFFff5533).withAlpha(0.75f));
+                g.drawText(juce::String(reductDB, 1) + " dB",
+                    juce::Rectangle<float>(fcX - 24.f, baseY - 13.f, 48.f, 11.f),
+                    juce::Justification::centred);
+            }
+        }
 
         // Marqueurs ±1σ (bande passante réelle du filtre)
         float xLeft  = fcX - sigma;
@@ -1543,72 +1580,746 @@ private:
 };
 
 // =============================================================================
-//  NRBandDisplay — 6-band Cedar noise reduction activity meter
+//  NRSpectrumDisplay — spectre FFT continu + threshold/floor draggables
 // =============================================================================
-class NRBandDisplay : public juce::Component, private juce::Timer
+class NRSpectrumDisplay : public juce::Component
 {
 public:
-    explicit NRBandDisplay(InvisibleFixAudioProcessor* p) : processor(p) { startTimerHz(30); }
-    ~NRBandDisplay() override { stopTimer(); }
+    NRSpectrumDisplay() = default;
+    InvisibleFixAudioProcessor* processor{ nullptr };
+    juce::RangedAudioParameter* threshParam{ nullptr };
+    juce::RangedAudioParameter* floorParam { nullptr };
 
     void paint(juce::Graphics& g) override
     {
-        int W = getWidth(), H = getHeight();
-        g.fillAll(juce::Colour(0xFF060514));
-        g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.12f));
-        g.drawRect(0, 0, W, H, 1);
+        float W = (float)getWidth(), H = (float)getHeight();
 
-        if (!processor) return;
-        float gains[6]{};
-        processor->copyNRBandGains(gains, 6);
+        // Fond
+        g.setColour(juce::Colour(0xFFf0faf8));
+        g.fillRoundedRectangle(0, 0, W, H, 5.0f);
+        g.setColour(juce::Colour(0xFF13add6).withAlpha(0.10f));
+        g.drawRoundedRectangle(0.5f, 0.5f, W-1, H-1, 5.0f, 1.0f);
 
-        static const char* labels[] = { "<150", "500", "1.5k", "4k", "8k", ">8k" };
-        int labelH = 13;
-        int barsH  = H - labelH - 2;
-        float barW = (float)(W - 2) / 6.0f;
+        const float specY = 6.0f, specH = H - 20.0f;
+        const float specX = 4.0f, specW = W - 8.0f;
 
-        for (int b = 0; b < 6; ++b)
+        // Spectre FFT (inputFftMagnitudes)
+        if (processor != nullptr)
         {
-            float gain      = juce::jlimit(0.0f, 1.0f, gains[b]);
-            float reduction = 1.0f - gain;
-            float bx        = 1.0f + (float)b * barW;
-            float slotH     = (float)barsH - 4.0f;
+            float mags[512]{};
+            processor->copyInputFftMagnitudes(mags, 512);
 
-            // dark slot
-            g.setColour(juce::Colour(0xFF0d1a1e));
-            g.fillRect(bx + 1.0f, 3.0f, barW - 2.0f, slotH);
+            // Normalise : trouver le max
+            float maxM = 1e-10f;
+            for (int i = 1; i < 512; ++i) maxM = juce::jmax(maxM, mags[i]);
 
-            // active bar (fill from bottom, height = reduction amount)
-            if (reduction > 0.01f)
+            // Dessine en barres
+            for (int px = 0; px < (int)specW; ++px)
             {
-                float fillH = reduction * slotH;
-                float fillY = 3.0f + slotH - fillH;
-                juce::Colour barCol = juce::Colour(0xFF1bb89e).withAlpha(0.35f + reduction * 0.65f);
-                g.setColour(barCol);
-                g.fillRect(bx + 1.0f, fillY, barW - 2.0f, fillH);
-
-                // bright top edge
-                g.setColour(juce::Colour(0xFF1bb89e));
-                g.fillRect(bx + 1.0f, fillY, barW - 2.0f, 1.5f);
+                float t    = (float)px / specW;
+                int   bin  = juce::jlimit(1, 511, (int)(1 + t * t * 510.0f));
+                float norm = juce::jlimit(0.0f, 1.0f, mags[bin] / maxM);
+                float barH = norm * specH;
+                float barY = specY + specH - barH;
+                g.setColour(juce::Colour(0xFFcdddd9).withAlpha(0.7f));
+                g.fillRect(specX + (float)px, barY, 1.0f, barH);
             }
 
-            // frequency label
-            g.setFont(juce::Font(juce::FontOptions(6.5f)));
-            g.setColour(juce::Colour(0xFF94a5a2));
-            g.drawText(labels[b], (int)bx, H - labelH, (int)barW, labelH,
-                       juce::Justification::centred);
+            // GR overlay (cyan) — zone entre thresh et floor
+            float thDB = threshParam ? threshParam->convertFrom0to1(threshParam->getValue()) : -40.0f;
+            float flDB = floorParam  ? floorParam->convertFrom0to1(floorParam->getValue())   : -60.0f;
+            float dbRange = 80.0f; // -80 to 0
+            float thY = specY + specH * (1.0f - (thDB + dbRange) / dbRange);
+            float flY = specY + specH * (1.0f - (flDB + dbRange) / dbRange);
+            thY = juce::jlimit(specY, specY + specH, thY);
+            flY = juce::jlimit(specY, specY + specH, flY);
+
+            // Overlay NR actif
+            g.setColour(juce::Colour(0xFF1bb89e).withAlpha(0.18f));
+            g.fillRect(specX, thY, specW, flY - thY);
+
+            // Threshold line (orange, draggable)
+            g.setColour(juce::Colour(0xFFFF8C00).withAlpha(0.90f));
+            g.fillRect(specX, thY - 1.0f, specW, 2.0f);
+            // Thumb
+            g.fillRoundedRectangle(specX + specW - 18.0f, thY - 5.0f, 16.0f, 10.0f, 3.0f);
+            g.setColour(juce::Colours::white);
+            g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
+            g.drawText("T", (int)(specX + specW - 18), (int)(thY - 5), 16, 10, juce::Justification::centred);
+
+            // Floor line (cyan, draggable)
+            g.setColour(juce::Colour(0xFF13add6).withAlpha(0.80f));
+            g.fillRect(specX, flY - 1.0f, specW, 1.5f);
+            g.fillRoundedRectangle(specX + specW - 18.0f, flY - 5.0f, 16.0f, 10.0f, 3.0f);
+            g.setColour(juce::Colours::white);
+            g.drawText("F", (int)(specX + specW - 18), (int)(flY - 5), 16, 10, juce::Justification::centred);
+
+            // Labels dB
+            g.setFont(juce::Font(juce::FontOptions(7.0f)));
+            g.setColour(juce::Colour(0xFFFF8C00).withAlpha(0.80f));
+            g.drawText(juce::String((int)thDB) + "dB", 2, (int)(thY - 8), 30, 10, juce::Justification::centredLeft);
+            g.setColour(juce::Colour(0xFF13add6).withAlpha(0.80f));
+            g.drawText(juce::String((int)flDB) + "dB", 2, (int)(flY + 1), 30, 10, juce::Justification::centredLeft);
         }
 
-        // faint horizontal guide at -12 dB (gain ~0.25 → reduction 0.75)
-        float guideY = 3.0f + (float)barsH * (1.0f - 0.75f) - 4.0f;
-        g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.08f));
-        g.drawHorizontalLine((int)guideY, 1.0f, (float)(W - 1));
+        // Labels fréquences bas
+        const float fLabels[] = { 100,500,1000,5000,10000,20000 };
+        const char* fStr[]    = { "100","500","1k","5k","10k","20k" };
+        float sr = processor ? (float)processor->getSampleRate() : 44100.0f;
+        g.setFont(juce::Font(juce::FontOptions(6.5f)));
+        g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.60f));
+        for (int i = 0; i < 6; ++i)
+        {
+            float t = std::sqrt((fLabels[i] - 20.0f) / (sr / 2.0f - 20.0f));
+            float px = specX + t * specW;
+            g.drawText(fStr[i], (int)(px - 12), (int)(specY + specH + 4), 26, 10, juce::Justification::centred);
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const float specY = 6.0f, specH = (float)getHeight() - 20.0f;
+        float dbRange = 80.0f;
+
+        auto yToDb = [&](float y) {
+            float norm = juce::jlimit(0.0f, 1.0f, (y - specY) / specH);
+            return (1.0f - norm) * dbRange - dbRange;
+        };
+
+        float clickDB = yToDb((float)e.y);
+        if (threshParam && floorParam) {
+            float thDB = threshParam->convertFrom0to1(threshParam->getValue());
+            float flDB = floorParam ->convertFrom0to1(floorParam->getValue());
+            dragTarget = (std::abs(clickDB - thDB) < std::abs(clickDB - flDB)) ? 0 : 1;
+            auto* p = (dragTarget == 0) ? threshParam : floorParam;
+            if (p) p->beginChangeGesture();
+        }
+        mouseDrag(e);
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (dragTarget < 0) return;
+        const float specY = 6.0f, specH = (float)getHeight() - 20.0f;
+        float norm = juce::jlimit(0.0f, 1.0f, ((float)e.y - specY) / specH);
+        float newNorm = 1.0f - norm;
+        auto* p = (dragTarget == 0) ? threshParam : floorParam;
+        if (p) p->setValueNotifyingHost(juce::jlimit(0.0f, 1.0f, newNorm));
+        repaint();
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        auto* p = (dragTarget == 0) ? threshParam : (dragTarget == 1 ? floorParam : nullptr);
+        if (p) p->endChangeGesture();
+        dragTarget = -1;
+    }
+
+    juce::MouseCursor getMouseCursor() override { return juce::MouseCursor::UpDownResizeCursor; }
+
+private:
+    int dragTarget{ -1 };
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NRSpectrumDisplay)
+};
+
+// =============================================================================
+// =============================================================================
+//  PresetBrowserPanel — browser scrollable (favoris, tags, description)
+// =============================================================================
+class PresetBrowserPanel : public juce::Component
+{
+public:
+    struct PresetMeta
+    {
+        bool        isFav    { false };
+        juce::String tags    { "" };
+        juce::String desc    { "" };
+    };
+
+    InvisibleFixAudioProcessor* processor{ nullptr };
+
+    explicit PresetBrowserPanel(InvisibleFixAudioProcessor& p) : processor(&p)
+    {
+        searchBox.setTextToShowWhenEmpty("Search presets...", juce::Colours::grey);
+        searchBox.setFont(juce::Font(juce::FontOptions(11.0f)));
+        searchBox.setColour(juce::TextEditor::backgroundColourId, juce::Colour(0xFFddeaf0));
+        searchBox.setColour(juce::TextEditor::outlineColourId,    juce::Colour(0xFF1bb89e).withAlpha(0.3f));
+        searchBox.setColour(juce::TextEditor::textColourId,       juce::Colour(0xFF26332f));
+        searchBox.onTextChange = [this] { rebuildFiltered(); repaint(); };
+        addAndMakeVisible(searchBox);
+
+        closeBtn.setButtonText("X");
+        closeBtn.setColour(juce::TextButton::buttonColourId,   juce::Colours::transparentBlack);
+        closeBtn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xFF94a5a2));
+        closeBtn.onClick = [this] { setVisible(false); };
+        addAndMakeVisible(closeBtn);
+
+        loadMetadata();
+        rebuildFiltered();
+    }
+
+    void resized() override
+    {
+        searchBox.setBounds(8, 8, getWidth() - 44, 22);
+        closeBtn .setBounds(getWidth() - 32, 8, 24, 22);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        // Fond du panel
+        g.setColour(juce::Colour(0xFFeaf5f2));
+        g.fillRoundedRectangle(getLocalBounds().toFloat(), 8.0f);
+        g.setColour(juce::Colour(0xFF1bb89e).withAlpha(0.4f));
+        g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 8.0f, 1.5f);
+
+        // Scroll + liste
+        int listY = 38;
+        int rowH  = 52;
+        int visH  = getHeight() - listY - 6;
+        int totalH = (int)filteredIndices.size() * rowH;
+
+        // Clip à la zone liste
+        g.reduceClipRegion(0, listY, getWidth(), visH);
+        g.setOrigin(0, listY - scrollOffset);
+
+        for (int i = 0; i < (int)filteredIndices.size(); ++i)
+        {
+            int idx = filteredIndices[i];
+            int ry  = i * rowH;
+            bool isSelected = (idx == selectedIdx);
+            bool isLoaded   = (idx == processor->currentPresetIndex);
+
+            // Fond ligne
+            juce::Colour rowBg = isLoaded   ? juce::Colour(0xFF1bb89e).withAlpha(0.18f)
+                               : isSelected ? juce::Colour(0xFF13add6).withAlpha(0.10f)
+                               :              juce::Colours::transparentBlack;
+            g.setColour(rowBg);
+            g.fillRoundedRectangle(6.0f, (float)ry + 2.0f, (float)getWidth() - 12.0f, (float)(rowH - 4), 5.0f);
+
+            bool isFactory = processor->presetIsFactory[idx];
+            auto& meta = getMeta(idx);
+
+            // ── Étoile favoris ─────────────────────────────────────────
+            g.setFont(juce::Font(juce::FontOptions(14.0f)));
+            g.setColour(meta.isFav ? juce::Colour(0xFFf0c040) : juce::Colour(0xFFcdddd9));
+            g.drawText(meta.isFav ? "\xe2\x98\x85" : "\xe2\x98\x86",
+                       8, ry + 6, 20, 20, juce::Justification::centred);
+
+            // ── Nom preset ─────────────────────────────────────────────
+            g.setFont(juce::Font(juce::FontOptions(12.0f).withStyle("Bold")));
+            g.setColour(isLoaded ? juce::Colour(0xFF1bb89e) : juce::Colour(0xFF26332f));
+            g.drawText(processor->presetNames[idx], 30, ry + 6, getWidth() - 80, 16,
+                       juce::Justification::centredLeft);
+
+            // ── Badge FACTORY / USER ────────────────────────────────────
+            juce::Colour bc = isFactory ? juce::Colour(0xFF1bb89e) : juce::Colour(0xFF5b7ef5);
+            g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
+            g.setColour(bc.withAlpha(0.75f));
+            g.drawText(isFactory ? "FACTORY" : "USER",
+                       getWidth() - 60, ry + 6, 52, 14, juce::Justification::centredRight);
+
+            // ── Tags ────────────────────────────────────────────────────
+            if (meta.tags.isNotEmpty())
+            {
+                g.setFont(juce::Font(juce::FontOptions(9.0f)));
+                g.setColour(juce::Colour(0xFF13add6).withAlpha(0.80f));
+                g.drawText(meta.tags, 30, ry + 24, getWidth() - 90, 12,
+                           juce::Justification::centredLeft);
+            }
+
+            // ── Description ─────────────────────────────────────────────
+            if (meta.desc.isNotEmpty())
+            {
+                g.setFont(juce::Font(juce::FontOptions(9.0f)));
+                g.setColour(juce::Colour(0xFF94a5a2));
+                g.drawText(meta.desc, 30, ry + 36, getWidth() - 36, 12,
+                           juce::Justification::centredLeft);
+            }
+
+            // Séparateur
+            g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.08f));
+            g.fillRect(8, ry + rowH - 2, getWidth() - 16, 1);
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        if (e.y < 38) return;
+        int rowH = 52;
+        int relY = e.y - 38 + scrollOffset;
+        int row  = relY / rowH;
+        if (row >= 0 && row < (int)filteredIndices.size())
+        {
+            int idx = filteredIndices[row];
+            // Clic étoile
+            if (e.x < 30)
+            {
+                getMeta(idx).isFav = !getMeta(idx).isFav;
+                saveMetadata();
+                repaint();
+                return;
+            }
+            selectedIdx = idx;
+
+            // Double clic = charger le preset
+            if (e.getNumberOfClicks() >= 2)
+                loadSelected();
+
+            repaint();
+        }
+    }
+
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
+    {
+        int rowH    = 52;
+        int maxScroll = juce::jmax(0, (int)filteredIndices.size() * rowH - (getHeight() - 38));
+        scrollOffset = juce::jlimit(0, maxScroll, scrollOffset - (int)(w.deltaY * 60.0f));
+        repaint();
+    }
+
+    void loadSelected()
+    {
+        if (selectedIdx >= 0 && selectedIdx < (int)processor->presetNames.size())
+        {
+            processor->loadPreset(selectedIdx);
+            if (auto* ed = findParentComponentOfClass<InvisibleFixAudioProcessorEditor>())
+                ed->updatePresetBar();
+            repaint();
+        }
+    }
+
+    // Édition inline — appelé depuis un popup externe (tags / desc)
+    void editTagsForSelected()
+    {
+        if (selectedIdx < 0) return;
+        auto& meta = getMeta(selectedIdx);
+        auto alertBox = std::make_shared<juce::AlertWindow>(
+            "Edit tags for \"" + processor->presetNames[selectedIdx] + "\"",
+            "", juce::AlertWindow::NoIcon);
+        alertBox->addTextEditor("tags", meta.tags, "Tags (comma-separated):");
+        alertBox->addTextEditor("desc", meta.desc, "Description:");
+        alertBox->addButton("OK", 1);
+        alertBox->addButton("Cancel", 0);
+        alertBox->enterModalState(true,
+            juce::ModalCallbackFunction::create([this, alertBox](int r) {
+                if (r == 1 && selectedIdx >= 0)
+                {
+                    getMeta(selectedIdx).tags = alertBox->getTextEditorContents("tags").trim();
+                    getMeta(selectedIdx).desc = alertBox->getTextEditorContents("desc").trim();
+                    saveMetadata();
+                    rebuildFiltered();
+                    repaint();
+                }
+            }), true);
+    }
+
+    void rebuildFiltered()
+    {
+        juce::String query = searchBox.getText().toLowerCase().trim();
+        filteredIndices.clear();
+        for (int i = 0; i < (int)processor->presetNames.size(); ++i)
+        {
+            auto& meta = getMeta(i);
+            if (query.isEmpty()
+                || processor->presetNames[i].toLowerCase().contains(query)
+                || meta.tags.toLowerCase().contains(query)
+                || meta.desc.toLowerCase().contains(query))
+            {
+                filteredIndices.push_back(i);
+            }
+        }
+        scrollOffset = 0;
+        repaint();
+    }
+
+    PresetMeta& getMeta(int idx)
+    {
+        while ((int)metaList.size() <= idx) metaList.emplace_back();
+        return metaList[idx];
     }
 
 private:
-    void timerCallback() override { repaint(); }
-    InvisibleFixAudioProcessor* processor;
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NRBandDisplay)
+    juce::TextEditor searchBox;
+    juce::TextButton closeBtn;
+    std::vector<int>         filteredIndices;
+    std::vector<PresetMeta>  metaList;
+    int  selectedIdx   { -1 };
+    int  scrollOffset  { 0 };
+
+    juce::File metaFile() const
+    {
+        return processor->getUserPresetsDir().getChildFile("browser_metadata.xml");
+    }
+
+    void loadMetadata()
+    {
+        auto f = metaFile();
+        if (!f.existsAsFile()) return;
+        if (auto xml = juce::XmlDocument::parse(f))
+        {
+            int i = 0;
+            for (auto* el : xml->getChildIterator())
+            {
+                auto& m = getMeta(i++);
+                m.isFav = el->getBoolAttribute("fav", false);
+                m.tags  = el->getStringAttribute("tags", "");
+                m.desc  = el->getStringAttribute("desc", "");
+            }
+        }
+    }
+
+    void saveMetadata()
+    {
+        juce::XmlElement root("presets");
+        for (int i = 0; i < (int)metaList.size(); ++i)
+        {
+            auto* el = root.createNewChildElement("preset");
+            el->setAttribute("fav",  metaList[i].isFav ? 1 : 0);
+            el->setAttribute("tags", metaList[i].tags);
+            el->setAttribute("desc", metaList[i].desc);
+        }
+        metaFile().getParentDirectory().createDirectory();
+        root.writeTo(metaFile());
+    }
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PresetBrowserPanel)
+};
+
+// =============================================================================
+//  DeRevCanvas — Visualisation dual-axis interactive pour le De-Reverb 3 bandes
+//  ↔ drag sur le handle blanc = seuil temporel (quand commence le traitement)
+//  ↕ drag dans la zone rouge = profondeur (combien est retiré)
+//  Timer 30 Hz → signal live par bande (enveloppe fast)
+// =============================================================================
+class DeRevCanvas : public juce::Component, private juce::Timer
+{
+public:
+    DeRevCanvas(InvisibleFixAudioProcessor& p, juce::AudioProcessorValueTreeState& a)
+        : proc(p), apvts(a)
+    {
+        startTimerHz(30);
+    }
+    ~DeRevCanvas() override { stopTimer(); }
+
+    void setLinked(bool l) { linked = l; repaint(); }
+    bool isLinked() const  { return linked; }
+
+    void paint(juce::Graphics& g) override
+    {
+        const int W = getWidth(), H = getHeight();
+        const int BH = H / 3;
+
+        // Paramètres courants (threads audio + UI partagent via atomics / param cache)
+        float thresh[3], depth[3];
+        thresh[0] = *apvts.getRawParameterValue("deRevThreshHF");
+        thresh[1] = *apvts.getRawParameterValue("deRevThreshMF");
+        thresh[2] = *apvts.getRawParameterValue("deRevThreshLF");
+        depth[0]  = *apvts.getRawParameterValue("deRevBandHF");
+        depth[1]  = *apvts.getRawParameterValue("deRevBandMF");
+        depth[2]  = *apvts.getRawParameterValue("deRevBandLF");
+
+        // Couleurs : HF=bleu, MF=teal, LF=ambre
+        const juce::Colour cols[3] = {
+            juce::Colour(0xFF13add6),
+            juce::Colour(0xFF1bb89e),
+            juce::Colour(0xFFe8a000)
+        };
+        const char* lbls[3] = { "HF", "MF", "LF" };
+
+        // Fond
+        g.fillAll(juce::Colour(0xFF0a1510));
+
+        // Grille verticale
+        g.setColour(juce::Colour(0xFF132520));
+        for (int qi = 1; qi < 4; ++qi)
+            g.fillRect((float)(W * qi / 4), 0.f, 1.f, (float)H);
+
+        for (int i = 0; i < 3; ++i)
+        {
+            const int by = i * BH;
+            const float T = juce::jmax(0.01f, thresh[i]);
+            const int tx = juce::roundToInt(T * (float)W);
+            const juce::Colour& col = cols[i];
+            const float dep = depth[i];
+
+            // Heatmap : modèle de décroissance exponentielle conceptuelle
+            for (int px = 0; px < W; ++px)
+            {
+                float tNorm = (float)px / (float)W;
+                float approxRatio = std::exp(-tNorm * 3.5f);
+                if (px < tx)
+                {
+                    // Zone conservée — teinte bande
+                    g.setColour(col.withAlpha(approxRatio * 0.22f));
+                    g.fillRect(px, by + 1, 1, BH - 2);
+                }
+                else
+                {
+                    // Zone retirée
+                    float tailD = (approxRatio < T) ? juce::jmax(0.f, 1.f - approxRatio / T) : 0.f;
+                    g.setColour(col.withAlpha(approxRatio * 0.06f));
+                    g.fillRect(px, by + 1, 1, BH - 2);
+                    g.setColour(juce::Colour(0xFFff5533).withAlpha(dep * tailD * approxRatio * 0.6f));
+                    g.fillRect(px, by + 1, 1, BH - 2);
+                }
+            }
+
+            // Waveform live : historique de l'enveloppe rapide dans la zone conservée
+            const int drawW = juce::jmin(tx - 4, HIST_LEN);
+            if (drawW > 6)
+            {
+                const float startX = (float)(tx - drawW - 2);
+                const float cy     = (float)by + (float)BH * 0.5f;
+
+                juce::Path fill, line;
+                bool first = true;
+                for (int p = 0; p < drawW; ++p)
+                {
+                    int   hIdx = (histWriteIdx - drawW + p + HIST_LEN) % HIST_LEN;
+                    float hVal = bandHistory[i][hIdx];
+                    float x    = startX + (float)p;
+                    float amp  = hVal * ((float)BH * 0.38f);
+
+                    if (first) { line.startNewSubPath(x, cy - amp); fill.startNewSubPath(x, cy); first = false; }
+                    line.lineTo(x, cy - amp);
+                    fill.lineTo(x, cy - amp);
+                }
+                fill.lineTo(startX + (float)drawW, cy);
+                fill.closeSubPath();
+
+                g.setColour(col.withAlpha(0.18f));
+                g.fillPath(fill);
+                g.setColour(col.withAlpha(0.80f));
+                g.strokePath(line, juce::PathStrokeType(1.1f));
+            }
+
+            // Barre GR live dans la zone rouge (indique la réduction active)
+            const float grR = 1.0f - bandGRSmooth[i];
+            if (grR > 0.02f && tx < W - 8)
+            {
+                const float grX  = (float)tx + (float)(W - tx) * 0.10f;
+                const float grBarH = juce::jmin(grR * dep * (float)(BH - 6), (float)(BH - 6));
+                const float gcy    = (float)by + (float)BH * 0.5f;
+                g.setColour(juce::Colour(0xFFff5533).withAlpha(0.75f));
+                g.fillRoundedRectangle(grX - 2.f, gcy - grBarH * 0.5f, 4.f, grBarH, 2.f);
+            }
+
+            // Label profondeur (%) + flèche dans zone rouge
+            const float zW = (float)(W - tx);
+            if (zW > 40.f)
+            {
+                const float cxL = (float)tx + zW * 0.42f;
+                g.setFont(juce::Font(juce::FontOptions(8.0f)).boldened());
+                g.setColour(juce::Colour(0xFFff5533).withAlpha(0.5f));
+                g.drawText(juce::String((int)(dep * 100.f)) + "%",
+                           juce::Rectangle<float>(cxL - 18.f, (float)by + (float)BH * 0.5f - 3.f, 36.f, 12.f),
+                           juce::Justification::centred);
+                if (BH > 36)
+                {
+                    g.setColour(juce::Colour(0xFFff5533).withAlpha(0.3f));
+                    g.drawText(juce::CharPointer_UTF8("\xe2\x86\x95"),
+                               juce::Rectangle<float>(cxL - 8.f, (float)by + (float)BH * 0.5f - 15.f, 16.f, 12.f),
+                               juce::Justification::centred);
+                }
+            }
+
+            // Séparateur de bande
+            if (i < 2)
+            {
+                g.setColour(juce::Colour(0xFF0a1510));
+                g.fillRect(0, by + BH - 1, W, 2);
+            }
+
+            // Ligne threshold (pointillés)
+            const float hcy = (float)by + (float)BH * 0.5f;
+            g.setColour(juce::Colours::white.withAlpha(0.45f));
+            for (float yp = (float)by + 3.f; yp < (float)(by + BH) - 3.f; yp += 5.f)
+                g.fillRect((float)tx - 0.75f, yp, 1.5f, 3.0f);
+
+            // Handle circulaire
+            g.setColour(juce::Colours::white.withAlpha(0.10f));
+            g.fillEllipse((float)tx - 8.f, hcy - 8.f, 16.f, 16.f);
+            g.setColour(juce::Colours::white.withAlpha(linked ? 0.85f : 0.60f));
+            g.drawEllipse((float)tx - 8.f, hcy - 8.f, 16.f, 16.f, linked ? 2.0f : 1.5f);
+            g.setFont(juce::Font(juce::FontOptions(9.0f)));
+            g.setColour(juce::Colours::white.withAlpha(0.75f));
+            g.drawText(juce::CharPointer_UTF8("\xe2\x86\x94"),
+                       juce::Rectangle<float>((float)tx - 8.f, hcy - 6.f, 16.f, 12.f),
+                       juce::Justification::centred);
+
+            // Temps en ms sous le handle
+            const float lblX = (tx > (int)(W * 0.65f)) ? (float)tx - 28.f : (float)tx + 5.f;
+            g.setFont(juce::Font(juce::FontOptions(8.0f)));
+            g.setColour(juce::Colours::white.withAlpha(0.32f));
+            g.drawText(juce::String((int)(T * 1000.f)) + "ms",
+                       juce::Rectangle<float>(lblX, (float)(by + BH) - 13.f, 30.f, 10.f),
+                       juce::Justification::centredLeft);
+
+            // Label de bande (en haut à gauche)
+            g.setFont(juce::Font(juce::FontOptions(8.0f)).boldened());
+            g.setColour(col.withAlpha(0.70f));
+            g.drawText(lbls[i],
+                       juce::Rectangle<float>(4.f, (float)by + 3.f, 20.f, 12.f),
+                       juce::Justification::centredLeft);
+        }
+
+        // Légende X (bas)
+        g.setFont(juce::Font(juce::FontOptions(7.5f)));
+        g.setColour(juce::Colour(0xFF1a3530));
+        g.drawText("son direct", juce::Rectangle<float>(4.f, (float)H - 11.f, 54.f, 10.f),
+                   juce::Justification::centredLeft);
+        g.drawText("queue de reverb \xe2\x86\x92", juce::Rectangle<float>((float)W * 0.3f, (float)H - 11.f, 100.f, 10.f),
+                   juce::Justification::centredLeft);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const int W = getWidth(), H = getHeight();
+        const int BH = H / 3;
+        const float mx = (float)e.x, my = (float)e.y;
+
+        dragStartX = mx;
+        dragStartY = my;
+        dragMode  = DragMode::None;
+        dragBand  = -1;
+
+        // Snapshot des valeurs actuelles
+        for (int i = 0; i < 3; ++i)
+        {
+            dragStartThresh[i] = *apvts.getRawParameterValue(threshId(i));
+            dragStartDepth[i]  = *apvts.getRawParameterValue(depthId(i));
+        }
+
+        // Détection : handle threshold ou zone rouge
+        for (int i = 0; i < 3; ++i)
+        {
+            const float T  = dragStartThresh[i];
+            const float tx = T * (float)W;
+            const float cy = (float)(i * BH) + (float)BH * 0.5f;
+
+            if (std::hypot(mx - tx, my - cy) < 12.f)
+            {
+                dragMode = DragMode::Threshold;
+                dragBand = i;
+                break;
+            }
+            if (mx > tx + 12.f && my > (float)(i * BH) && my < (float)((i + 1) * BH))
+            {
+                dragMode = DragMode::Depth;
+                dragBand = i;
+                break;
+            }
+        }
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (dragMode == DragMode::None || dragBand < 0) return;
+        const float W = (float)getWidth();
+        const float H = (float)getHeight();
+        const float dx = ((float)e.x - dragStartX) / W;
+        const float dy = (dragStartY - (float)e.y) / H;
+
+        auto setParam = [&](const char* id, float raw, float lo, float hi) {
+            float clamped = juce::jlimit(lo, hi, raw);
+            if (auto* param = apvts.getParameter(id))
+                param->setValueNotifyingHost(param->convertTo0to1(clamped));
+        };
+
+        if (dragMode == DragMode::Threshold)
+        {
+            for (int b = 0; b < 3; ++b)
+            {
+                if (!linked && b != dragBand) continue;
+                setParam(threshId(b), dragStartThresh[b] + dx, 0.02f, 1.0f);
+            }
+        }
+        else if (dragMode == DragMode::Depth)
+        {
+            for (int b = 0; b < 3; ++b)
+            {
+                if (!linked && b != dragBand) continue;
+                setParam(depthId(b), dragStartDepth[b] + dy * 2.0f, 0.0f, 1.0f);
+            }
+        }
+        repaint();
+    }
+
+    void mouseUp(const juce::MouseEvent&) override { dragMode = DragMode::None; }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        const int W = getWidth(), H = getHeight();
+        const int BH = H / 3;
+        const float mx = (float)e.x, my = (float)e.y;
+
+        for (int i = 0; i < 3; ++i)
+        {
+            float T  = *apvts.getRawParameterValue(threshId(i));
+            float tx = T * (float)W;
+            float cy = (float)(i * BH) + (float)BH * 0.5f;
+            if (std::hypot(mx - tx, my - cy) < 12.f)
+            {
+                setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+                return;
+            }
+            if (mx > tx + 12.f && my > (float)(i * BH) && my < (float)((i + 1) * BH))
+            {
+                setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+                return;
+            }
+        }
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+private:
+    void timerCallback() override
+    {
+        histWriteIdx = (histWriteIdx + 1) % HIST_LEN;
+        // Mapping canvas (i=0=HF, i=1=MF, i=2=LF) → proc band index (0=LF,1=MF,2=HF)
+        const int procIdx[3] = { 2, 1, 0 };
+        for (int i = 0; i < 3; ++i)
+        {
+            float energy = proc.revBandLiveEnergy[procIdx[i]].load();
+            // Conversion log pour visualisation perceptuelle
+            float dB   = 20.f * std::log10(energy + 1e-6f);
+            float norm = juce::jlimit(0.f, 1.f, (dB + 60.f) / 60.f);
+            bandHistory[i][histWriteIdx] = norm;
+
+            float gr = proc.revBandLiveGR[procIdx[i]].load();
+            bandGRSmooth[i] = bandGRSmooth[i] * 0.80f + gr * 0.20f;
+        }
+        repaint();
+    }
+
+    const char* threshId(int i) const
+    {
+        static const char* ids[] = { "deRevThreshHF", "deRevThreshMF", "deRevThreshLF" };
+        return ids[i];
+    }
+    const char* depthId(int i) const
+    {
+        static const char* ids[] = { "deRevBandHF", "deRevBandMF", "deRevBandLF" };
+        return ids[i];
+    }
+
+    InvisibleFixAudioProcessor& proc;
+    juce::AudioProcessorValueTreeState& apvts;
+
+    static constexpr int HIST_LEN = 60;
+    float bandHistory[3][HIST_LEN]{};
+    int   histWriteIdx{ 0 };
+    float bandGRSmooth[3]{ 1.f, 1.f, 1.f };
+
+    enum class DragMode { None, Threshold, Depth };
+    DragMode dragMode{ DragMode::None };
+    int   dragBand{ -1 };
+    float dragStartX{}, dragStartY{};
+    float dragStartThresh[3]{};
+    float dragStartDepth[3]{};
+    bool  linked{ false };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DeRevCanvas)
 };
 
 // =============================================================================
@@ -1632,9 +2343,10 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     setupModernSlider(deEssSlider,  "DE-ESS");
     setupModernSlider(airSlider,    "AIR");
 
-    // Master Gain (juce::Slider direct)
-    masterGainSlider.setSliderStyle(juce::Slider::SliderStyle::LinearHorizontal);
-    masterGainSlider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 45, 18);
+    // Master Gain : boite verticale draggable (sans mini-slider horizontal)
+    masterGainSlider.setSliderStyle(juce::Slider::SliderStyle::LinearBarVertical);
+    masterGainSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    masterGainSlider.setWantsKeyboardFocus(false);
     addAndMakeVisible(masterGainSlider);
 
     masterGainLabel.setText("MASTER GAIN", juce::dontSendNotification);
@@ -1643,13 +2355,8 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     masterGainLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF26332f));
     addAndMakeVisible(masterGainLabel);
 
-    // Master gain slider : Arc Fin horizontal style
-    masterGainSlider.setColour(juce::Slider::thumbColourId,       juce::Colour(0xFF16b3bf));
-    masterGainSlider.setColour(juce::Slider::trackColourId,       juce::Colour(0xFFcdddd9));
-    masterGainSlider.setColour(juce::Slider::backgroundColourId,  juce::Colour(0xFFcdddd9));
-    masterGainSlider.setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xFF94a5a2));
-    masterGainSlider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colour(0xB3FFFFFF));
-    masterGainSlider.setColour(juce::Slider::textBoxOutlineColourId,    juce::Colour(0xB3C8DCDC));
+    masterGainSlider.setColour(juce::Slider::trackColourId,      juce::Colour(0xFF1bb89e).withAlpha(0.40f));
+    masterGainSlider.setColour(juce::Slider::backgroundColourId, juce::Colour(0xFFcdddd9).withAlpha(0.45f));
 
     // Descriptions légères sous les knobs façade
     auto applyFacadeDesc = [](ModernSlider& ms, const juce::String& desc) {
@@ -1738,6 +2445,7 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     // --- 3. CONFIGURATION DES TIROIRS AVANCÉS ---
     setupModernSlider(advRoomFreqSlider, "Notch Freq");
     setupModernSlider(advRoomQSlider, "Notch Q");
+    setupModernSlider(advRoomDepthBoostSlider, "Depth Boost");
     setupModernSlider(advDeEssFreqSlider,    "De-Ess Freq");
     setupModernSlider(advDeEssThreshSlider,  "Thresh dB");
     setupModernSlider(advDeEssIntenSlider,   "Intensity");
@@ -1751,7 +2459,7 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     advDeEssIntenSlider.slider.setLookAndFeel(nullptr); // retirer ArcFinLAF, utiliser V4 par défaut
     setupModernSlider(advDeEssAtkSlider,     "Attack");
     setupModernSlider(advDeEssRelSlider,     "Release");
-    setupModernSlider(advDeEssDetectSlider,  "Q");
+    setupModernSlider(advDeEssDetectSlider,  "WIDTH");
     advDeEssDetectSlider.slider.setSliderStyle(juce::Slider::LinearHorizontal);
     advDeEssDetectSlider.slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 36, 14);
     advDeEssDetectSlider.slider.setLookAndFeel(&airFreqLAF);
@@ -1762,9 +2470,55 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     setupModernSlider(advGateThresholdSlider, "Gate Thresh");
     setupModernSlider(advGateAttackSlider,    "Gate Attack");
     setupModernSlider(advGateHoldSlider,      "Gate Hold");
+    setupModernSlider(plosiveProtectSlider,   "PLOSIVE");
+    plosiveProtectSlider.slider.setName("plosiveProtectSlider");
 
     // Air drive
     setupModernSlider(advAirDriveSlider, "Heat");
+
+    // Air saturation mode — 4 radio buttons
+    auto setupSatBtn = [&](juce::TextButton& btn, const juce::String& label, int mode) {
+        btn.setButtonText(label);
+        btn.setClickingTogglesState(false);
+        btn.setWantsKeyboardFocus(false);
+        btn.setColour(juce::TextButton::buttonColourId,     juce::Colour(0xFF1e3330));
+        btn.setColour(juce::TextButton::buttonOnColourId,   juce::Colour(0xFF0e9ab8));
+        btn.setColour(juce::TextButton::textColourOffId,    juce::Colour(0xFFcdddd9));
+        btn.setColour(juce::TextButton::textColourOnId,     juce::Colours::white);
+        btn.onClick = [this, mode]() {
+            audioProcessor.undoManager.beginNewTransaction();
+            if (auto* p = dynamic_cast<juce::AudioParameterInt*>(
+                    audioProcessor.apvts.getParameter("airSatMode")))
+                *p = mode;
+        };
+        addChildComponent(btn);
+    };
+    setupSatBtn(airSatTriodeBtn, "TRIODE",   0);
+    setupSatBtn(airSatClassABtn, "CLASS-A",  1);
+    setupSatBtn(airSatTapeBtn,   "TAPE",     2);
+    setupSatBtn(airSatIronBtn,   "IRON",     3);
+    airSatTriodeBtn.setName("airSatTriodeBtn");
+    airSatClassABtn.setName("airSatClassABtn");
+    airSatTapeBtn  .setName("airSatTapeBtn");
+    airSatIronBtn  .setName("airSatIronBtn");
+
+    // Air Shape — slider horizontal bipolaire
+    advAirShapeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    advAirShapeSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    advAirShapeSlider.setRange(-1.0, 1.0, 0.01);
+    advAirShapeSlider.setValue(0.0, juce::dontSendNotification);
+    advAirShapeSlider.setDoubleClickReturnValue(true, 0.0);
+    advAirShapeSlider.setWantsKeyboardFocus(false);
+    advAirShapeSlider.setName("advAirShapeSlider");
+    advAirShapeSlider.setColour(juce::Slider::trackColourId,      juce::Colour(0xFF13add6).withAlpha(0.55f));
+    advAirShapeSlider.setColour(juce::Slider::backgroundColourId, juce::Colour(0xFF1e3632).withAlpha(0.70f));
+    addChildComponent(advAirShapeSlider);
+
+    advAirShapeLabel.setText("TRANSIENT SHAPE", juce::dontSendNotification);
+    advAirShapeLabel.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
+    advAirShapeLabel.setJustificationType(juce::Justification::centred);
+    advAirShapeLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF94a5a2));
+    addChildComponent(advAirShapeLabel);
 
     // Curseur AIR FREQ (juce::Slider direct) — style personnalisé AirFreqSliderLAF
     advAirFreqSlider.setSliderStyle(juce::Slider::SliderStyle::LinearHorizontal);
@@ -1806,7 +2560,8 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     deEssModeAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "deEssFilterMode", deEssModeBtn.button);
 
     advRoomFreqAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "roomNotchFreq", advRoomFreqSlider.slider);
-    advRoomQAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "roomNotchQ", advRoomQSlider.slider);
+    advRoomQAttach    = std::make_unique<SliderAttachment>(audioProcessor.apvts, "roomNotchQ",    advRoomQSlider.slider);
+    advRoomDepthBoostAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "roomDepthBoost", advRoomDepthBoostSlider.slider);
 
     advDeEssFreqAttach    = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deEssFreq",       advDeEssFreqSlider.slider);
     advDeEssThreshAttach  = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deEssThreshold",  advDeEssThreshSlider.slider);
@@ -1823,19 +2578,23 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     advGateThresholdAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanGateThreshold", advGateThresholdSlider.slider);
     advGateAttackAttach    = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanGateAttack",    advGateAttackSlider.slider);
     advGateHoldAttach      = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanGateHold",      advGateHoldSlider.slider);
+    plosiveProtectAttach   = std::make_unique<SliderAttachment>(audioProcessor.apvts, "cleanPlosiveProtect", plosiveProtectSlider.slider);
 
     // Air drive
     advAirDriveAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "airDrive", advAirDriveSlider.slider);
+    advAirShapeAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "airShape", advAirShapeSlider);
 
     // NR — Noise Reduction (Cedar-aligned labels)
     setupModernSlider(nrThreshSlider, "Sensitivity");
     setupModernSlider(nrRatioSlider,  "Curve");
     setupModernSlider(nrFloorSlider,  "Reduction");
     setupModernSlider(nrSmoothSlider, "Speed");
-    nrThreshAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrThreshold", nrThreshSlider.slider);
-    nrRatioAttach  = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrRatio",     nrRatioSlider.slider);
-    nrFloorAttach  = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrFloor",     nrFloorSlider.slider);
-    nrSmoothAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrSmooth",    nrSmoothSlider.slider);
+    setupModernSlider(nrArtifactBlendSlider, "Blend");
+    nrThreshAttach       = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrThreshold",    nrThreshSlider.slider);
+    nrRatioAttach        = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrRatio",        nrRatioSlider.slider);
+    nrFloorAttach        = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrFloor",        nrFloorSlider.slider);
+    nrSmoothAttach       = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrSmooth",       nrSmoothSlider.slider);
+    nrArtifactBlendAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "nrArtifactBlend", nrArtifactBlendSlider.slider);
 
     // Curve and Speed: horizontal sliders (same style as Q slider in De-Ess)
     for (auto* ms : { &nrRatioSlider, &nrSmoothSlider })
@@ -1854,15 +2613,21 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
         return dynamic_cast<juce::RangedAudioParameter*>(audioProcessor.apvts.getParameter(id));
     };
 
-    // NR Band Activity display (6-band Cedar meter)
-    nrBandDisplay = std::make_unique<NRBandDisplay>(&audioProcessor);
+    // NR Spectrum Display (FFT + draggable thresh/floor)
+    {
+        auto* nrSpec = new NRSpectrumDisplay();
+        nrSpec->processor   = &audioProcessor;
+        nrSpec->threshParam = dynamic_cast<juce::RangedAudioParameter*>(audioProcessor.apvts.getParameter("nrThreshold"));
+        nrSpec->floorParam  = dynamic_cast<juce::RangedAudioParameter*>(audioProcessor.apvts.getParameter("nrFloor"));
+        nrBandDisplay.reset(nrSpec);
+    }
     addChildComponent(nrBandDisplay.get());
 
     // Bouton LEARN — snapshot plancher de bruit
     nrLearnBtn.setButtonText("LEARN");
-    nrLearnBtn.setColour(juce::TextButton::buttonColourId,    juce::Colour(0xFF0d1a1e));
+    nrLearnBtn.setColour(juce::TextButton::buttonColourId,    juce::Colour(0xFF1e3330));
     nrLearnBtn.setColour(juce::TextButton::buttonOnColourId,  juce::Colour(0xFF1bb89e));
-    nrLearnBtn.setColour(juce::TextButton::textColourOffId,   juce::Colour(0xFF94a5a2));
+    nrLearnBtn.setColour(juce::TextButton::textColourOffId,   juce::Colour(0xFFcdddd9));
     nrLearnBtn.setColour(juce::TextButton::textColourOnId,    juce::Colour(0xFF060514));
     nrLearnBtn.setToggleable(false);
     nrLearnBtn.onClick = [this]()
@@ -1887,9 +2652,9 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
 
     // Bouton AUTO gate — détecte la zone optimale et règle le threshold
     gateAutoBtn.setButtonText("AUTO");
-    gateAutoBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xFF0d1a1e));
+    gateAutoBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xFF1e3330));
     gateAutoBtn.setColour(juce::TextButton::buttonOnColourId,juce::Colour(0xFF13add6));
-    gateAutoBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF94a5a2));
+    gateAutoBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFFcdddd9));
     gateAutoBtn.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF060514));
     gateAutoBtn.onClick = [this]()
     {
@@ -1917,6 +2682,140 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
         }
     };
     addChildComponent(gateAutoBtn);
+
+    // ── Bypass NR + Gate indépendants ────────────────────────────────────────
+    auto setupBypassSmall = [&](juce::TextButton& btn, const juce::String& label) {
+        btn.setButtonText(label);
+        btn.setClickingTogglesState(true);
+        btn.setWantsKeyboardFocus(false);
+        btn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xFF0d1a1e));
+        btn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFFCC3300));
+        btn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xFF94a5a2));
+        btn.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
+        addChildComponent(btn);
+    };
+    setupBypassSmall(nrBypassBtn,   "NR BYP");
+    setupBypassSmall(gateBypassBtn, "GATE BYP");
+    nrBypassAttach   = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "nrBypass",   nrBypassBtn);
+    gateBypassAttach = std::make_unique<ButtonAttachment>(audioProcessor.apvts, "gateBypass", gateBypassBtn);
+
+    // ── Bypass global A/B ─────────────────────────────────────────────────────
+    // Le titre "INVISIBLE●FIX" agit comme bouton bypass-all (transparent, sur le wordmark)
+    // globalBypassBtn : zone transparente sur le wordmark — aucun rendu JUCE
+    globalBypassBtn.setButtonText("");
+    globalBypassBtn.setLookAndFeel(&bypassZoneLAF);
+    globalBypassBtn.setToggleable(false);
+    globalBypassBtn.setWantsKeyboardFocus(false);
+    globalBypassBtn.onClick = [this]()
+    {
+        bool newState = !audioProcessor.globalBypassActive.load();
+        audioProcessor.globalBypassActive.store(newState);
+        repaint();
+    };
+    addAndMakeVisible(globalBypassBtn);
+
+    // LIVE/HQ bouton — haut droite (remplace le label FACTORY/USER)
+    liveHQBtn.setButtonText("HQ");
+    liveHQBtn.setWantsKeyboardFocus(false);
+    liveHQBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xFF0d2e28));
+    liveHQBtn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xFF1bb89e));
+    liveHQBtn.onClick = [this]()
+    {
+        audioProcessor.undoManager.beginNewTransaction();
+        if (auto* p = audioProcessor.apvts.getParameter("liveMode"))
+            p->setValueNotifyingHost(p->getValue() > 0.5f ? 0.0f : 1.0f);
+    };
+    addAndMakeVisible(liveHQBtn);
+
+    // ── Barre preset (style Arturia) ─────────────────────────────────────────
+    auto stylePillBtn = [](juce::TextButton& b, const juce::String& text) {
+        b.setButtonText(text);
+        b.setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
+        b.setColour(juce::TextButton::buttonOnColourId,juce::Colour(0xFF1bb89e).withAlpha(0.18f));
+        b.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF4a6660));
+        b.setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF1bb89e));
+    };
+    // ── Preset browser flottant ───────────────────────────────────────────────
+    presetBrowser = std::make_unique<PresetBrowserPanel>(audioProcessor);
+    presetBrowser->setVisible(false);
+    addChildComponent(presetBrowser.get());
+
+    // Bouton BROWSE (≡) dans la barre preset
+    stylePillBtn(browsePresetBtn, juce::String::fromUTF8("\xe2\x89\xa1")); // ≡
+    browsePresetBtn.onClick = [this]() { togglePresetBrowser(); };
+    addAndMakeVisible(browsePresetBtn);
+
+    prevPresetBtn.setButtonText(juce::String::fromUTF8("\xe2\x80\xb9")); // ‹
+    nextPresetBtn.setButtonText(juce::String::fromUTF8("\xe2\x80\xba")); // ›
+    for (auto* b : { &prevPresetBtn, &nextPresetBtn })
+    {
+        b->setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
+        b->setColour(juce::TextButton::buttonOnColourId,juce::Colours::transparentBlack);
+        b->setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF4a6660));
+        b->setColour(juce::TextButton::textColourOnId,  juce::Colour(0xFF1bb89e));
+    }
+    stylePillBtn(savePresetBtn, "SAVE");
+    stylePillBtn(initPresetBtn, "DEFAULT");
+
+    prevPresetBtn.onClick = [this]()
+    {
+        int n = (int)audioProcessor.presetNames.size();
+        if (n == 0) return;
+        int idx = (audioProcessor.currentPresetIndex - 1 + n) % n;
+        audioProcessor.loadPreset(idx);
+        updatePresetBar();
+    };
+    nextPresetBtn.onClick = [this]()
+    {
+        int n = (int)audioProcessor.presetNames.size();
+        if (n == 0) return;
+        int idx = (audioProcessor.currentPresetIndex + 1) % n;
+        audioProcessor.loadPreset(idx);
+        updatePresetBar();
+    };
+    savePresetBtn.onClick = [this]()
+    {
+        // Boîte de dialogue nom de preset — style simple JUCE
+        auto* dialog = new juce::AlertWindow("Sauvegarder le preset",
+                                              "Nom du preset :", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor("name", audioProcessor.currentPresetName, "");
+        dialog->addButton("Sauvegarder", 1);
+        dialog->addButton("Annuler", 0);
+        dialog->enterModalState(true,
+            juce::ModalCallbackFunction::create([this, dialog](int result) {
+                if (result == 1)
+                {
+                    juce::String name = dialog->getTextEditorContents("name").trim();
+                    if (name.isNotEmpty())
+                    {
+                        audioProcessor.savePreset(name);
+                        updatePresetBar();
+                    }
+                }
+                delete dialog;
+            }), false);
+    };
+    initPresetBtn.onClick = [this]()
+    {
+        audioProcessor.loadPreset(0); // Init est toujours l'index 0
+        updatePresetBar();
+    };
+
+    presetNameLabel.setText(audioProcessor.currentPresetName, juce::dontSendNotification);
+    presetNameLabel.setFont(juce::Font(juce::FontOptions(11.5f)));
+    presetNameLabel.setJustificationType(juce::Justification::centred);
+    presetNameLabel.setColour(juce::Label::textColourId, juce::Colour(0xFF2a3f3b));
+    presetNameLabel.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+
+    // presetTypeLabel dessiné dans paint(), composant caché
+    presetTypeLabel.setVisible(false);
+
+    addAndMakeVisible(prevPresetBtn);
+    addAndMakeVisible(nextPresetBtn);
+    addAndMakeVisible(savePresetBtn);
+    addAndMakeVisible(initPresetBtn);
+    addAndMakeVisible(presetNameLabel);
+    addAndMakeVisible(presetTypeLabel);
 
     // NR Dual Rail (kept for reference, hidden in Clean tab — replaced by knobs + band display)
     nrDualRail = std::make_unique<DualRailComponent>();
@@ -1975,20 +2874,260 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     deEssDetect->processor   = &audioProcessor;
     addChildComponent(deEssDetect.get());
 
+    // ── Metering I/O — gain sliders invisibles sur les barres ─────────────────
+    auto setupGainSlider = [&](juce::Slider& sl, const juce::String& paramId) {
+        sl.setSliderStyle(juce::Slider::LinearVertical);
+        sl.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
+        sl.setWantsKeyboardFocus(false);
+        sl.setColour(juce::Slider::thumbColourId, juce::Colours::transparentBlack);
+        sl.setColour(juce::Slider::backgroundColourId, juce::Colours::transparentBlack);
+        sl.setColour(juce::Slider::trackColourId, juce::Colours::transparentBlack);
+        addChildComponent(sl);
+    };
+    setupGainSlider(inputGainSlider, "inputGain");
+    setupGainSlider(outputGainSlider, "outputGain");
+    inputGainAttach  = std::make_unique<SliderAttachment>(audioProcessor.apvts, "inputGain",  inputGainSlider);
+    outputGainAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "outputGain", outputGainSlider);
+    inputGainSlider.onValueChange  = [this]{ repaint(); };
+    outputGainSlider.onValueChange = [this]{ repaint(); };
+
+    // ── A/B Snapshot — session only ───────────────────────────────────────────
+    auto setupABBtn = [&](juce::TextButton& btn, const juce::String& txt) {
+        btn.setButtonText(txt);
+        btn.setWantsKeyboardFocus(false);
+        btn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xFF0d1a1e));
+        btn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF0f3028));
+        btn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xFF3a6a5a));
+        btn.setColour(juce::TextButton::textColourOnId,   juce::Colour(0xFF1bb89e));
+        addAndMakeVisible(btn);
+    };
+    setupABBtn(abBtnA,    "A");
+    setupABBtn(abArrowBtn, juce::CharPointer_UTF8("\xe2\x86\x92 B"));
+    setupABBtn(abBtnB,    "B");
+
+    abBtnA.onClick = [this]()
+    {
+        if (!hasSnapshotA) { abSaveSlot(0); }
+        else               { abRecallSlot(0); }
+        abActiveSlot = 0;
+        abUpdateButtons();
+    };
+    abBtnB.onClick = [this]()
+    {
+        if (!hasSnapshotB) { abSaveSlot(1); }
+        else               { abRecallSlot(1); }
+        abActiveSlot = 1;
+        abUpdateButtons();
+    };
+    abArrowBtn.onClick = [this]()
+    {
+        // Copie l'état courant dans l'AUTRE slot
+        int target = (abActiveSlot == 0) ? 1 : 0;
+        abSaveSlot(target);
+        abUpdateButtons();
+    };
+    abUpdateButtons();
+
+    // De-Rev Canvas — visualisation dual-axis interactive
+    deRevCanvas = std::make_unique<DeRevCanvas>(audioProcessor, audioProcessor.apvts);
+    addChildComponent(deRevCanvas.get());
+
+    // Bouton LINK pour le canvas De-Rev
+    deRevLinkBtn.setButtonText(juce::CharPointer_UTF8("\xe2\x9b\x93 LINK"));
+    deRevLinkBtn.setClickingTogglesState(true);
+    deRevLinkBtn.setWantsKeyboardFocus(false);
+    deRevLinkBtn.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xFF0d1a1e));
+    deRevLinkBtn.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xFF0f3028));
+    deRevLinkBtn.setColour(juce::TextButton::textColourOffId,  juce::Colour(0xFF3a6a5a));
+    deRevLinkBtn.setColour(juce::TextButton::textColourOnId,   juce::Colour(0xFF1bb89e));
+    deRevLinkBtn.onClick = [this]()
+    {
+        if (deRevCanvas) deRevCanvas->setLinked(deRevLinkBtn.getToggleState());
+    };
+    addChildComponent(deRevLinkBtn);
+
     // Initialiser l'alpha des modules bypass selon l'état courant
     updateBypassAlphas();
 
     // Timer 30Hz : VU fluide + blink BYP via compteur de frames
     startTimerHz(30);
 
-    setSize(760, 290);
+    // Resize uniquement via le bouton de scale (pas de drag coin)
+    setResizable(false, nullptr);
+
+    // Indicateur scale cliquable (popup menu des tailles)
+    scaleBtn.setButtonText("100 %");
+    scaleBtn.setColour(juce::TextButton::buttonColourId,  juce::Colour(0x22000000));
+    scaleBtn.setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF94a5a2));
+    scaleBtn.onClick = [this]()
+    {
+        juce::PopupMenu m;
+        const float sizes[]   = { 0.75f, 1.0f, 1.25f, 1.50f };
+        const char*  labels[] = { "75 %", "100 %", "125 %", "150 %" };
+        for (int i = 0; i < 4; ++i)
+            m.addItem(i + 1, labels[i], true, std::abs(sizes[i] - currentScale) < 0.01f);
+        m.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&scaleBtn),
+            [this](int result)
+            {
+                if (result < 1 || result > 4) return;
+                const float sizes[] = { 0.75f, 1.0f, 1.25f, 1.50f };
+                currentScale = sizes[result - 1];
+                resizeConstrainer.currentSnap = currentScale;
+                const int baseH = (currentTab == AdvancedTab::Clean) ? 504
+                                : (currentTab == AdvancedTab::None)   ? 338 : 478;
+                setSize(juce::roundToInt(760.0f * currentScale),
+                        juce::roundToInt((float)baseH * currentScale));
+            });
+    };
+    addAndMakeVisible(scaleBtn);
+
+    // Undo / Redo (style Arturia — flèches dans la barre preset)
+    undoBtn.setButtonText(juce::String::fromUTF8("\xe2\x86\x90")); // ←
+    redoBtn.setButtonText(juce::String::fromUTF8("\xe2\x86\x92")); // →
+    for (auto* b : { &undoBtn, &redoBtn }) {
+        b->setColour(juce::TextButton::buttonColourId,  juce::Colours::transparentBlack);
+        b->setColour(juce::TextButton::textColourOffId, juce::Colour(0xFF4a6660));
+    }
+    undoBtn.onClick = [this]() { audioProcessor.undoManager.undo(); };
+    redoBtn.onClick = [this]() { audioProcessor.undoManager.redo(); };
+    addAndMakeVisible(undoBtn);
+    addAndMakeVisible(redoBtn);
+
+    // De-Rev Floor slider
+    setupModernSlider(deRevFloorSlider, "Floor");
+    deRevFloorAttach = std::make_unique<SliderAttachment>(
+        audioProcessor.apvts, "deRevFloor", deRevFloorSlider.slider);
+
+    setupModernSlider(deRevBandLFSlider, "LF");
+    deRevBandLFSlider.slider.setName("deRevBandLFSlider");
+    setupModernSlider(deRevBandMFSlider, "MF");
+    deRevBandMFSlider.slider.setName("deRevBandMFSlider");
+    setupModernSlider(deRevBandHFSlider, "HF");
+    deRevBandHFSlider.slider.setName("deRevBandHFSlider");
+    deRevBandLFAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deRevBandLF", deRevBandLFSlider.slider);
+    deRevBandMFAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deRevBandMF", deRevBandMFSlider.slider);
+    deRevBandHFAttach = std::make_unique<SliderAttachment>(audioProcessor.apvts, "deRevBandHF", deRevBandHFSlider.slider);
+
+    // Helper pour activer le double-clic reset avec la valeur par défaut APVTS
+    auto enableDblClick = [&](juce::Slider& sl, const juce::String& paramId) {
+        if (auto* p = audioProcessor.apvts.getParameter(paramId))
+            sl.setDoubleClickReturnValue(true,
+                p->convertFrom0to1(p->getDefaultValue()));
+    };
+    enableDblClick(cleanSlider.slider,    "clean");
+    enableDblClick(deEssSlider.slider,    "deess");
+    enableDblClick(roomSlider.slider,     "room");
+    enableDblClick(reverbSlider.slider,   "reverb");
+    enableDblClick(airSlider.slider,      "air");
+    enableDblClick(masterGainSlider,      "outputGain");
+    enableDblClick(advRoomFreqSlider.slider,       "roomNotchFreq");
+    enableDblClick(advRoomQSlider.slider,          "roomNotchQ");
+    enableDblClick(advRoomDepthBoostSlider.slider, "roomDepthBoost");
+    enableDblClick(advDeEssFreqSlider.slider, "deEssFreq");
+    enableDblClick(advDeEssThreshSlider.slider, "deEssThreshold");
+    enableDblClick(advDeEssIntenSlider.slider,  "deEssIntensity");
+    enableDblClick(advDeEssAtkSlider.slider,  "deEssAttack");
+    enableDblClick(advDeEssRelSlider.slider,  "deEssRelease");
+    enableDblClick(advDeEssDetectSlider.slider, "deEssDetectRatio");
+    enableDblClick(advGateThresholdSlider.slider, "cleanGateThreshold");
+    enableDblClick(advGateAttackSlider.slider,    "cleanGateAttack");
+    enableDblClick(advGateHoldSlider.slider,      "cleanGateHold");
+    enableDblClick(plosiveProtectSlider.slider,   "cleanPlosiveProtect");
+    enableDblClick(advGateFloorSlider.slider,     "cleanGateFloor");
+    enableDblClick(advCleanRelSlider.slider,      "cleanRelease");
+    enableDblClick(advAirDriveSlider.slider,      "airDrive");
+    enableDblClick(nrThreshSlider.slider, "nrThreshold");
+    enableDblClick(nrRatioSlider.slider,  "nrRatio");
+    enableDblClick(nrFloorSlider.slider,  "nrFloor");
+    enableDblClick(nrSmoothSlider.slider, "nrSmooth");
+    enableDblClick(deRevFloorSlider.slider,    "deRevFloor");
+    enableDblClick(deRevBandLFSlider.slider,   "deRevBandLF");
+    enableDblClick(deRevBandMFSlider.slider,   "deRevBandMF");
+    enableDblClick(deRevBandHFSlider.slider,   "deRevBandHF");
+
+    setSize(760, 338);
 }
+
 
 InvisibleFixAudioProcessorEditor::~InvisibleFixAudioProcessorEditor() = default;
 
 // =============================================================================
+//  A/B Snapshot helpers
+// =============================================================================
+void InvisibleFixAudioProcessorEditor::abSaveSlot(int slot)
+{
+    juce::MemoryOutputStream mos;
+    audioProcessor.apvts.copyState().writeToStream(mos);
+    if (slot == 0) { snapshotA = mos.getMemoryBlock(); hasSnapshotA = true; }
+    else           { snapshotB = mos.getMemoryBlock(); hasSnapshotB = true; }
+}
+
+void InvisibleFixAudioProcessorEditor::abRecallSlot(int slot)
+{
+    const juce::MemoryBlock& mb = (slot == 0) ? snapshotA : snapshotB;
+    if (mb.getSize() == 0) return;
+    juce::MemoryInputStream mis(mb, false);
+    auto state = juce::ValueTree::readFromStream(mis);
+    if (state.isValid()) audioProcessor.apvts.replaceState(state);
+}
+
+void InvisibleFixAudioProcessorEditor::abUpdateButtons()
+{
+    // Apparence A
+    bool aActive = (abActiveSlot == 0);
+    abBtnA.setColour(juce::TextButton::textColourOffId,
+        aActive ? juce::Colour(0xFF1bb89e) : (hasSnapshotA ? juce::Colour(0xFF94a5a2) : juce::Colour(0xFF3a6a5a)));
+    abBtnA.setColour(juce::TextButton::buttonColourId,
+        aActive ? juce::Colour(0xFF0f3028) : juce::Colour(0xFF0d1a1e));
+
+    // Apparence B
+    bool bActive = (abActiveSlot == 1);
+    abBtnB.setColour(juce::TextButton::textColourOffId,
+        bActive ? juce::Colour(0xFF1bb89e) : (hasSnapshotB ? juce::Colour(0xFF94a5a2) : juce::Colour(0xFF3a6a5a)));
+    abBtnB.setColour(juce::TextButton::buttonColourId,
+        bActive ? juce::Colour(0xFF0f3028) : juce::Colour(0xFF0d1a1e));
+
+    // Flèche — pointe vers l'autre slot
+    if (abActiveSlot == 0)
+        abArrowBtn.setButtonText(juce::CharPointer_UTF8("\xe2\x86\x92 B"));
+    else if (abActiveSlot == 1)
+        abArrowBtn.setButtonText(juce::CharPointer_UTF8("A \xe2\x86\x90"));
+    else
+        abArrowBtn.setButtonText(juce::CharPointer_UTF8("\xe2\x87\x84"));
+}
+
+// =============================================================================
 //  APPLICATION DU STYLE AUX SLIDERS
 // =============================================================================
+void InvisibleFixAudioProcessorEditor::updatePresetBar()
+{
+    presetNameLabel.setText(audioProcessor.currentPresetName, juce::dontSendNotification);
+    presetTypeLabel.setText(audioProcessor.currentPresetIsFactory ? "FACTORY" : "USER PRESET",
+                            juce::dontSendNotification);
+    presetTypeLabel.setColour(juce::Label::textColourId,
+        audioProcessor.currentPresetIsFactory
+            ? juce::Colour(0xFF1bb89e).withAlpha(0.65f)
+            : juce::Colour(0xFF13add6).withAlpha(0.75f));
+    if (presetBrowser != nullptr && presetBrowser->isVisible())
+    {
+        presetBrowser->rebuildFiltered();
+        presetBrowser->repaint();
+    }
+    repaint();
+}
+
+void InvisibleFixAudioProcessorEditor::togglePresetBrowser()
+{
+    if (presetBrowser == nullptr) return;
+    bool show = !presetBrowser->isVisible();
+    presetBrowser->setVisible(show);
+    if (show)
+    {
+        presetBrowser->rebuildFiltered();
+        presetBrowser->toFront(false);
+    }
+}
+
 void InvisibleFixAudioProcessorEditor::applyModernKnobStyle(juce::Slider& slider)
 {
     slider.setLookAndFeel(&arcFinLAF);
@@ -2003,6 +3142,7 @@ void InvisibleFixAudioProcessorEditor::setupModernSlider(ModernSlider& modernSli
     // Taille textbox par défaut pour les knobs avancés (50px)
     modernSlider.slider.setSliderStyle(juce::Slider::SliderStyle::RotaryHorizontalVerticalDrag);
     modernSlider.slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 50, 16);
+    // double-clic reset géré par les custom mouseDoubleClick dans les composants
     modernSlider.slider.setColour(juce::Slider::textBoxTextColourId, juce::Colour(0xFF26332f));
     modernSlider.slider.setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
     modernSlider.slider.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
@@ -2020,27 +3160,115 @@ void InvisibleFixAudioProcessorEditor::setupModernSlider(ModernSlider& modernSli
 }
 
 // =============================================================================
+//  SCALE CONSTRAINER — snap aux paliers avant tout resize
+// =============================================================================
+void InvisibleFixAudioProcessorEditor::ScaleConstrainer::checkBounds(
+    juce::Rectangle<int>& bounds,
+    const juce::Rectangle<int>& /*previousBounds*/,
+    const juce::Rectangle<int>& /*limits*/,
+    bool, bool, bool, bool)
+{
+    const float snaps[] = { 0.75f, 1.0f, 1.25f, 1.50f };
+    float rawS = (float)bounds.getWidth() / 760.0f;
+
+    // Hystérésis : on ne change de palier que si on dépasse le MILIEU vers le voisin.
+    // Sans ça, on oscillerait à chaque pixel sur la frontière.
+    float nearest = currentSnap;
+    float nearestDist = std::abs(currentSnap - rawS);
+    for (float s : snaps)
+    {
+        float d = std::abs(s - rawS);
+        if (d < nearestDist) { nearestDist = d; nearest = s; }
+    }
+    if (nearest != currentSnap)
+    {
+        // On bascule seulement si on a passé le point médian
+        float mid = (currentSnap + nearest) * 0.5f;
+        bool pastMid = (nearest > currentSnap) ? (rawS > mid) : (rawS < mid);
+        if (pastMid) currentSnap = nearest;
+    }
+
+    int baseH = 338;
+    if (tabPtr != nullptr)
+    {
+        if      (*tabPtr == AdvancedTab::Clean) baseH = 504;
+        else if (*tabPtr != AdvancedTab::None)  baseH = 478;
+    }
+    bounds.setWidth (juce::roundToInt(760.0f * currentSnap));
+    bounds.setHeight(juce::roundToInt((float)baseH * currentSnap));
+}
+
+// =============================================================================
 //  DESSIN GRAPHIQUE — ARC FIN
 // =============================================================================
 void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    int W = getWidth(), H = getHeight();
+    // ── Scale snap : tout le dessin est en coordonnées de base (760×baseH) ───
+    // La transform scale(S) fait le reste automatiquement — zéro changement ailleurs.
+    const float S   = getWidth() / 760.0f;
+    const float BW  = 760.0f;
+    const float BH  = getHeight() / S;   // hauteur en coordonnées virtuelles
+
+    g.addTransform(juce::AffineTransform::scale(S));
 
     // ── Fond dégradé 145° ebf4f7 → e4f0ee → ddeaf0 ──────────────────────────
     {
         juce::ColourGradient bg(juce::Colour(0xFFebf4f7), 0.0f, 0.0f,
-                                juce::Colour(0xFFddeaf0), (float)W, (float)H, false);
+                                juce::Colour(0xFFddeaf0), BW, BH, false);
         bg.addColour(0.55, juce::Colour(0xFFe4f0ee));
         g.setGradientFill(bg);
-        g.fillRoundedRectangle(0, 0, W, H, 9.0f);
+        g.fillRoundedRectangle(0.0f, 0.0f, BW, BH, 9.0f);
     }
 
     // ── Bordure extérieure glass ─────────────────────────────────────────────
     g.setColour(juce::Colours::white.withAlpha(0.65f));
-    g.drawRoundedRectangle(0.5f, 0.5f, (float)W-1, (float)H-1, 9.0f, 1.0f);
+    g.drawRoundedRectangle(0.5f, 0.5f, BW - 1.0f, BH - 1.0f, 9.0f, 1.0f);
+
+    // ── Barre Preset style Arturia — 28px, épurée, nom centré ────────────────
+    {
+        const float PW = BW;
+        const float PH = 28.0f;
+
+        // Fond légèrement distinct du reste du plugin
+        g.setColour(juce::Colour(0xFFd4e8e4));
+        g.fillRect(0.0f, 0.0f, PW, PH);
+
+        // Séparateur bas (trait fin)
+        g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.28f));
+        g.fillRect(0.0f, PH - 1.0f, PW, 1.0f);
+
+        // Zone centrale : deux petits chevrons et le nom
+        // Prev arrow zone : 24px à x=202
+        // Name zone       : 302px x=228..530
+        // Next arrow zone : 24px à x=532
+
+        // Fond dégradé subtil de la zone nom (léger creux Arturia)
+        juce::ColourGradient nameGrad(
+            juce::Colour(0xFFc8deda).withAlpha(0.55f), 228.0f, 0.0f,
+            juce::Colour(0xFFd4e8e4).withAlpha(0.0f),  228.0f, PH, false);
+        g.setGradientFill(nameGrad);
+        g.fillRect(202.0f, 0.0f, 356.0f, PH - 1.0f);
+        g.setColour(juce::Colours::transparentBlack);
+
+        // Traits verticaux délimitant la zone nom (style Arturia)
+        g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.20f));
+        g.fillRect(202.0f, 5.0f, 1.0f, PH - 10.0f);
+        g.fillRect(557.0f, 5.0f, 1.0f, PH - 10.0f);
+
+        // Séparateur avant les boutons d'action
+        g.fillRect(570.0f, 5.0f, 1.0f, PH - 10.0f);
+
+    }
+
+    // ── Tout le contenu ci-dessous est décalé de 28px vers le bas ────────────
+    g.saveState();
+    g.addTransform(juce::AffineTransform::translation(0.0f, 28.0f));
 
     // ── Header ───────────────────────────────────────────────────────────────
-    // Wordmark gauche : INVISIBLE ● FIX (positions calculées sur largeur réelle)
+    // Wordmark gauche : INVISIBLE ● FIX — cliquable comme bypass-all
+    bool bypassActive = audioProcessor.globalBypassActive.load();
+    bool blinkVis     = bypassActive && bypassBlinkOn;  // vrai si le blink est visible
+
     int hY = 12, hH = 28;
     auto titleFont = juce::Font(juce::FontOptions(17.0f));
     g.setFont(titleFont);
@@ -2051,17 +3279,26 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
     float invisW = juce::GlyphArrangement::getStringWidth(titleFont, "INVISIBLE");
     float dotX = 22.0f + invisW + 5.0f;
     float dotY = (float)hY + (float)hH * 0.5f - 3.0f;
-    g.setColour(juce::Colour(0xFF13add6));
+
+    // Pastille : verte cyan normal, rouge clignotant si bypass actif
+    juce::Colour dotColour = bypassActive
+        ? (blinkVis ? juce::Colour(0xFFFF3333) : juce::Colour(0xFFFF3333).withAlpha(0.20f))
+        : juce::Colour(0xFF13add6);
+    g.setColour(dotColour);
     g.fillEllipse(dotX, dotY, 6.0f, 6.0f);
 
+    // FIX : teal normal, rouge clignotant si bypass actif
+    juce::Colour fixColour = bypassActive
+        ? (blinkVis ? juce::Colour(0xFFFF3333) : juce::Colour(0xFFFF3333).withAlpha(0.20f))
+        : juce::Colour(0xFF1bb89e);
     g.setFont(titleFont);
-    g.setColour(juce::Colour(0xFF1bb89e));
+    g.setColour(fixColour);
     g.drawText("FIX", (int)(dotX + 9.0f), hY, 40, hH, juce::Justification::centredLeft);
 
     // Version — droite du header
     g.setFont(juce::Font(juce::FontOptions(9.0f)));
     g.setColour(juce::Colour(0xFF94a5a2));
-    g.drawText("V0.8  LAB STUDIO", W - 345, hY, 110, hH, juce::Justification::centredRight);
+    g.drawText("V0.8  LAB STUDIO", (int)BW - 345, hY, 110, hH, juce::Justification::centredRight);
 
     // ── Cartes modules ───────────────────────────────────────────────────────
     // x positions : [24,168,312,456,600], w=136, y=58, h=200
@@ -2071,7 +3308,7 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
 
     AdvancedTab tabForMod[5] = {
         AdvancedTab::Clean, AdvancedTab::Room,
-        AdvancedTab::None,  AdvancedTab::DeEss, AdvancedTab::Air
+        AdvancedTab::DeRev, AdvancedTab::DeEss, AdvancedTab::Air
     };
     // bypass states
     bool bypassed[5] = {
@@ -2163,7 +3400,7 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
         }
         else if (currentTab == AdvancedTab::DeEss)
         {
-            drawAdvPanel(24, 281, (float)(W - 48), 130, "DE-ESSER ADVANCED");
+            drawAdvPanel(24, 281, BW - 48.0f, 130, "DE-ESSER ADVANCED");
         }
         else if (currentTab == AdvancedTab::Room)
         {
@@ -2224,74 +3461,70 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
             g.drawText("NOTCH Q",    (int)(rpX + 112), (int)(rpY + 26), 60, 10,
                        juce::Justification::centredLeft);
 
-            // ── Chip DOMINANT RESONANCE — détection FFT réelle ────────────────────
+            // ── Chip NOTCH TRACKER — fréquence réelle du filtre + profondeur ────
             {
-                float sr2 = (float)audioProcessor.getSampleRate();
-                if (sr2 < 1.0f) sr2 = 44100.0f;
-                float displayMagsChip[2048]{};
-                audioProcessor.copyFftMagnitudes(displayMagsChip, 2048);
-
-                int binLow  = juce::jlimit(1, 2047, (int)(100.0f  * 2048.0f / sr2));
-                int binHigh = juce::jlimit(1, 2047, (int)(2000.0f * 2048.0f / sr2));
-                int   peakBin = binLow;
-                float peakMag = 0.0f;
-                for (int b = binLow; b <= binHigh; ++b)
-                {
-                    if (displayMagsChip[b] > peakMag)
-                    { peakMag = displayMagsChip[b]; peakBin = b; }
-                }
-                float peakFreqFFT = (float)peakBin * sr2 / 2048.0f;
-                float peakDB      = 20.0f * std::log10(peakMag / 2048.0f + 1e-7f);
-                bool  hasSignal   = (peakDB > -55.0f);
-
-                double QD2   = juce::jlimit(0.5, 15.0,
+                float trackedFreq = audioProcessor.getRoomTrackedFreq();
+                float dynDepth    = audioProcessor.getRoomDynDepth();
+                float manualFreq  = *audioProcessor.apvts.getRawParameterValue("roomNotchFreq");
+                double Q = juce::jlimit(0.5, 15.0,
                     (double)*audioProcessor.apvts.getRawParameterValue("roomNotchQ"));
-                double bwFFT = (double)peakFreqFFT / QD2;
-                int fLowFFT  = juce::jmax(1, (int)(peakFreqFFT - bwFFT * 0.5));
-                int fHighFFT = (int)(peakFreqFFT + bwFFT * 0.5);
+                float effectiveDB = -24.0f * juce::jmax(0.20f, dynDepth);
+                bool  isTracking  = std::abs(trackedFreq - manualFreq) > 8.0f;
 
-                float chipX = rpX + 10.0f, chipY = rpY + 96.0f;
-                float chipW = rpW - 20.0f, chipH = 48.0f;
-                g.setColour(juce::Colour(0xFF13add6).withAlpha(0.06f));
+                float chipX = rpX + 10.0f, chipY = rpY + 88.0f;
+                float chipW = rpW - 20.0f, chipH = 56.0f;
+
+                // Fond — plus coloré si le tracking est actif
+                juce::Colour chipAccent = isTracking ? juce::Colour(0xFF1bb89e)
+                                                     : juce::Colour(0xFF13add6);
+                g.setColour(chipAccent.withAlpha(0.08f));
                 g.fillRoundedRectangle(chipX, chipY, chipW, chipH, 6.0f);
-                g.setColour(juce::Colour(0xFF13add6).withAlpha(0.14f));
+                g.setColour(chipAccent.withAlpha(0.22f));
                 g.drawRoundedRectangle(chipX, chipY, chipW, chipH, 6.0f, 1.0f);
 
+                // Titre
                 g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
                 g.setColour(juce::Colour(0xFF94a5a2));
-                g.drawText("DOMINANT RESONANCE", (int)chipX, (int)(chipY + 7), (int)chipW, 10,
+                g.drawText("NOTCH TRACKER", (int)chipX, (int)(chipY + 6), (int)chipW, 10,
                            juce::Justification::centred);
 
-                if (hasSignal)
-                {
-                    juce::String zoneTxt = "Zone estim" + juce::String::fromUTF8("\xC3\xA9") + "e   "
-                        + juce::String(fLowFFT) + " \xe2\x80\x93 " + juce::String(fHighFFT) + " Hz";
-                    g.setFont(juce::Font(juce::FontOptions(8.0f)));
-                    g.setColour(juce::Colour(0xFF7ab8c0));
-                    g.drawText(zoneTxt, (int)chipX, (int)(chipY + 20), (int)chipW, 10,
-                               juce::Justification::centred);
+                // Fréquence trackée (filtre réel) vs manuelle (slider)
+                juce::String freqStr = juce::String((int)trackedFreq) + " Hz";
+                if (isTracking)
+                    freqStr += "  (slider: " + juce::String((int)manualFreq) + " Hz)";
+                g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+                g.setColour(chipAccent);
+                g.drawText(freqStr, (int)chipX, (int)(chipY + 20), (int)chipW, 12,
+                           juce::Justification::centred);
 
-                    juce::String centTxt = "Centro" + juce::String::fromUTF8("\xC3\xAF") + "de \xC2\xB7 "
-                        + juce::String((int)peakFreqFFT) + " Hz \xC2\xB7 Q "
-                        + juce::String(QD2, 2);
-                    g.setFont(juce::Font(juce::FontOptions(7.5f)));
-                    g.setColour(juce::Colour(0xFF94a5a2));
-                    g.drawText(centTxt, (int)chipX, (int)(chipY + 32), (int)chipW, 10,
-                               juce::Justification::centred);
-                }
-                else
-                {
-                    g.setFont(juce::Font(juce::FontOptions(8.0f)));
-                    g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.5f));
-                    g.drawText("en attente de signal audio...",
-                               (int)chipX, (int)(chipY + 22), (int)chipW, 10,
-                               juce::Justification::centred);
-                }
+                // Profondeur dynamique + barre de niveau
+                juce::String depthStr = "Reduction: " + juce::String(effectiveDB, 1) + " dB  |  Q "
+                                       + juce::String(Q, 1);
+                g.setFont(juce::Font(juce::FontOptions(7.5f)));
+                g.setColour(juce::Colour(0xFF94a5a2));
+                g.drawText(depthStr, (int)chipX, (int)(chipY + 34), (int)chipW, 10,
+                           juce::Justification::centred);
+
+                // Barre de profondeur dynamique (dynDepth visualisé)
+                float barX = chipX + 16.0f, barY = chipY + 46.0f;
+                float barW = chipW - 32.0f, barH = 5.0f;
+                g.setColour(juce::Colour(0xFFcdddd9).withAlpha(0.4f));
+                g.fillRoundedRectangle(barX, barY, barW, barH, 2.5f);
+                g.setColour(chipAccent.withAlpha(0.75f));
+                g.fillRoundedRectangle(barX, barY, barW * juce::jmax(0.20f, dynDepth), barH, 2.5f);
             }
+        }
+        else if (currentTab == AdvancedTab::DeRev)
+        {
+            drawAdvPanel(24, 281, BW - 48.0f, 152, "DE-REV ADVANCED");
+            // Légende floor (knob à droite)
+            g.setFont(juce::Font(juce::FontOptions(8.0f)));
+            g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.55f));
+            g.drawText("FLOOR",  656, 388, 52, 10, juce::Justification::centred);
         }
         else if (currentTab == AdvancedTab::Air)
         {
-            drawAdvPanel(24, 281, (float)(W - 48), 152, "AIR CHARACTER");
+            drawAdvPanel(24, 281, BW - 48.0f, 152, "AIR CHARACTER");
 
             // Fréquence de coupure (lue depuis l'APVTS = même valeur que le slider)
             float fc = juce::jlimit(500.0f, 20000.0f,
@@ -2366,43 +3599,40 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
                     else          fillR.lineTo(cx2, py);
                 }
                 if (started) { fillR.lineTo(sX + sW, zeroY); fillR.closeSubPath(); }
-                juce::ColourGradient cg(juce::Colour(0xFF13add6).withAlpha(0.22f), fcXpx, sY,
-                                        juce::Colour(0xFF1bb89e).withAlpha(0.38f), sX+sW, sY, false);
+
+                // Remplissage droit : cyan→teal de base, réchauffe vers orange selon Drive
+                float airDriveVal = juce::jlimit(0.0f, 1.0f,
+                    (float)*audioProcessor.apvts.getRawParameterValue("airDrive"));
+
+                juce::Colour cyanNear(0xFF13add6);
+                juce::Colour tealFar (0xFF1bb89e);
+                juce::Colour warmNear(0xFFFF8C00);
+                juce::Colour warmFar (0xFFFF6600);
+
+                juce::Colour gradNear = cyanNear.interpolatedWith(warmNear, airDriveVal * 0.85f);
+                juce::Colour gradFar  = tealFar .interpolatedWith(warmFar,  airDriveVal * 0.85f);
+
+                float alphaNear = 0.22f + airDriveVal * 0.18f;
+                float alphaFar  = 0.38f + airDriveVal * 0.22f;
+
+                juce::ColourGradient cg(gradNear.withAlpha(alphaNear), fcXpx, sY,
+                                        gradFar .withAlpha(alphaFar),  sX + sW, sY, false);
                 g.setGradientFill(cg);
                 g.fillPath(fillR);
             }
 
-            // Stroke courbe
+            // Lire Drive pour la suite (déjà lu dans le bloc ci-dessus mais hors scope ici)
+            float airDriveVal = juce::jlimit(0.0f, 1.0f,
+                (float)*audioProcessor.apvts.getRawParameterValue("airDrive"));
+
+            // Stroke courbe : toujours cyan d'origine
             g.setColour(juce::Colour(0xFF13add6).withAlpha(0.92f));
             g.strokePath(shelf, juce::PathStrokeType(1.5f,
                 juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-            // Ligne verticale fc — position exactement sur le thumb du slider
-            float airDriveVal = juce::jlimit(0.0f, 1.0f,
-                (float)*audioProcessor.apvts.getRawParameterValue("airDrive"));
-            bool satActive = (airDriveVal > 0.08f);
-
-            float lineAlpha = satActive ? (bypassBlinkOn ? 1.0f : 0.60f) : 1.0f;
-            float lineWidth = satActive ? (bypassBlinkOn ? 3.0f : 1.5f)  : 1.5f;
-
-            g.setColour(juce::Colour(0xFF13add6).withAlpha(lineAlpha));
-            g.fillRect(fcXpx - lineWidth * 0.5f, sY, lineWidth, sH);
-
-            if (satActive)
-            {
-                float haloW = 4.0f + airDriveVal * 14.0f;
-                juce::ColourGradient haloR(
-                    juce::Colour(0xFF13add6).withAlpha(airDriveVal * 0.30f), fcXpx, sY,
-                    juce::Colours::transparentBlack, fcXpx + haloW, sY, false);
-                g.setGradientFill(haloR);
-                g.fillRect(fcXpx, sY, haloW, sH);
-
-                juce::ColourGradient haloL(
-                    juce::Colour(0xFF13add6).withAlpha(airDriveVal * 0.30f), fcXpx, sY,
-                    juce::Colours::transparentBlack, fcXpx - haloW, sY, false);
-                g.setGradientFill(haloL);
-                g.fillRect(fcXpx - haloW, sY, haloW, sH);
-            }
+            // Ligne verticale fc : cyan fixe, fine (pas d'animation)
+            g.setColour(juce::Colour(0xFF13add6).withAlpha(0.55f));
+            g.fillRect(fcXpx - 1.0f, sY, 1.5f, sH);
 
             // Label fréquence au-dessus du canvas (suit la ligne)
             juce::String fcLabel = (fc >= 1000.0f)
@@ -2444,27 +3674,127 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
             g.drawText(fcLabel, (int)(fcXpx - 16), (int)(tkY + 6), 34, 10,
                        juce::Justification::centred);
 
-            // ── Air Drive knob zone (droite) ──────────────────────────────
-            // Knob dessiné par le composant child (setBounds dans resized)
-            // Juste le label valeur et sub-label
+            // ── Labels zone droite ────────────────────────────────────────
+            g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
+            g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.80f));
+            g.drawText("HEAT",     464, 283, 58,  10, juce::Justification::centred);
+            g.drawText("SAT TYPE", 520, 283, 200, 10, juce::Justification::centred);
 
-            // ── Chip CHARACTER ────────────────────────────────────────────
-            float chipX = 464.0f, chipY2 = 380.0f, chipW = 264.0f, chipH = 48.0f;
-            g.setColour(juce::Colour(0xFF13add6).withAlpha(0.07f));
-            g.fillRoundedRectangle(chipX, chipY2, chipW, chipH, 6.0f);
-            g.setColour(juce::Colour(0xFF13add6).withAlpha(0.16f));
-            g.drawRoundedRectangle(chipX, chipY2, chipW, chipH, 6.0f, 1.0f);
+            // ── Valeur % Drive sous le knob HEAT ──────────────────────────
+            {
+                float drv = juce::jlimit(0.0f, 1.0f,
+                    (float)*audioProcessor.apvts.getRawParameterValue("airDrive"));
+                g.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
+                g.setColour(juce::Colour(0xFF13add6));
+                g.drawText(juce::String(juce::roundToInt(drv * 100)) + " %", 460, 364, 58, 10,
+                           juce::Justification::centred);
+            }
+
+            // ── TRANSIENT SHAPE — cadre bleuté + valeur ───────────────────
+            {
+                float shapeVal = *audioProcessor.apvts.getRawParameterValue("airShape");
+                // Fond bleuté
+                g.setColour(juce::Colour(0xFF0d2e3c).withAlpha(0.55f));
+                g.fillRoundedRectangle(464.0f, 368.0f, 264.0f, 42.0f, 5.0f);
+                g.setColour(juce::Colour(0xFF13add6).withAlpha(0.20f));
+                g.drawRoundedRectangle(464.0f, 368.0f, 264.0f, 42.0f, 5.0f, 1.0f);
+                // Valeur
+                juce::String shapeTxt;
+                juce::Colour shapeCol;
+                if      (shapeVal >  0.05f) { shapeTxt = "CRISP +" + juce::String(juce::roundToInt(shapeVal * 100)) + "%"; shapeCol = juce::Colour(0xFF13add6); }
+                else if (shapeVal < -0.05f) { shapeTxt = "SMOOTH " + juce::String(juce::roundToInt(shapeVal * 100)) + "%"; shapeCol = juce::Colour(0xFF1bb89e); }
+                else                        { shapeTxt = "NEUTRAL"; shapeCol = juce::Colour(0xFF94a5a2); }
+                g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
+                g.setColour(shapeCol);
+                g.drawText(shapeTxt, 464, 408, 264, 10, juce::Justification::centred);
+            }
+
+            // ── CHARACTER — sous le slider de fréquence ───────────────────
             g.setFont(juce::Font(juce::FontOptions(7.0f)));
-            g.setColour(juce::Colour(0xFF94a5a2));
-            g.drawText("CHARACTER", (int)chipX, (int)(chipY2 + 10), (int)chipW, 10,
-                       juce::Justification::centred);
-            g.setFont(juce::Font(juce::FontOptions(11.0f).withStyle("Bold")));
+            g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.60f));
+            g.drawText("CHARACTER", 38, 428, 200, 10, juce::Justification::centredLeft);
+            g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
             g.setColour(juce::Colour(0xFF13add6));
-            g.drawText(fc > 10000.0f ? "PURE AIR" : "PRESENCE",
-                       (int)chipX, (int)(chipY2 + 24), (int)chipW, 14,
-                       juce::Justification::centred);
+            g.drawText(fc > 10000.0f ? "PURE AIR" : "PRESENCE", 38, 438, 200, 12,
+                       juce::Justification::centredLeft);
+
         }
     }
+
+    // ── Tooltip bar (20px, bas du plugin) — memes couleurs que barre preset ───
+    {
+        float tbY = BH - 48.0f; // bas de l'espace contenu (hors preset bar 28px)
+        // Fond identique a la barre preset
+        g.setColour(juce::Colour(0xFFd4e8e4));
+        g.fillRect(0.0f, tbY, BW, 20.0f);
+        // Separateur haut
+        g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.28f));
+        g.fillRect(0.0f, tbY, BW, 1.0f);
+
+        g.setFont(juce::Font(juce::FontOptions(9.0f)));
+        if (currentTooltipText.isNotEmpty()) {
+            // Nom du parametre en cyan
+            g.setColour(juce::Colour(0xFF0e9ab8));
+            g.drawText(currentTooltipParam + "  ", 10, (int)tbY, 140, 20, juce::Justification::centredLeft);
+            // Description en gris
+            g.setColour(juce::Colour(0xFF4a6660));
+            g.drawText(currentTooltipText, 148, (int)tbY, (int)BW - 200, 20, juce::Justification::centredLeft);
+        } else {
+            g.setColour(juce::Colour(0xFF94a5a2).withAlpha(0.50f));
+            g.drawText("Survoler un parametre pour voir sa description", 10, (int)tbY, (int)BW - 20, 20, juce::Justification::centredLeft);
+        }
+    }
+
+    // ── Metering I/O — barres minimalistes dans la barre preset ─────────────
+    {
+        auto drawMeter = [&](float x, float y, float w, float h,
+                             float peak, float hold, float gainDB)
+        {
+            g.setColour(juce::Colour(0xFF0d1a1e));
+            g.fillRoundedRectangle(x, y, w, h, 2.f);
+
+            float lvl = juce::jlimit(0.f, 1.f, peak);
+            float barH = lvl * h;
+            juce::Colour barCol = (lvl > 0.85f) ? juce::Colour(0xFFe05050)
+                                : (lvl > 0.65f) ? juce::Colour(0xFFe0a020)
+                                                 : juce::Colour(0xFF1bb89e);
+            if (barH > 0.5f)
+            {
+                g.setColour(barCol.withAlpha(0.85f));
+                g.fillRoundedRectangle(x, y + h - barH, w, barH, 2.f);
+            }
+
+            if (hold > 0.01f)
+            {
+                float holdY = y + h - hold * h;
+                g.setColour(juce::Colours::white.withAlpha(0.7f));
+                g.fillRect(x, holdY, w, 1.5f);
+            }
+
+            juce::String lbl = (gainDB >= 0.f ? "+" : "") + juce::String((int)gainDB);
+            g.setFont(juce::Font(juce::FontOptions(7.f)));
+            g.setColour(juce::Colour(0xFF94a5a2));
+            g.drawText(lbl, (int)(x - 2), (int)(y + h + 1), (int)(w + 4), 8,
+                       juce::Justification::centred);
+        };
+
+        float inGain  = (float)inputGainSlider.getValue();
+        float outGain = (float)outputGainSlider.getValue();
+        drawMeter(32.f, 5.f,  8.f, 18.f, meterInputPeak,  meterInputHold,  inGain);
+        drawMeter(744.f, 5.f, 8.f, 18.f, meterOutputPeak, meterOutputHold, outGain);
+    }
+
+    // ── Valeur Master Gain dessinee dans le header ───────────────────────────
+    {
+        float gainDB = (float)masterGainSlider.getValue();
+        juce::String gainStr = (gainDB >= 0.0f ? "+" : "") + juce::String(gainDB, 1) + " dB";
+        g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
+        g.setColour(juce::Colour(0xFF26332f).withAlpha(0.75f));
+        g.drawText(gainStr, 670, 42, 60, 16, juce::Justification::centred);
+    }
+
+    // Fin du bloc translaté de 22px (preset bar en haut)
+    g.restoreState();
 }
 
 // =============================================================================
@@ -2472,23 +3802,30 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
 // =============================================================================
 void InvisibleFixAudioProcessorEditor::resized()
 {
+    // Derive le scale depuis la vraie largeur du composant (source de verite)
+    currentScale = (float)getWidth() / 760.0f;
+    resizeConstrainer.currentSnap = currentScale;
+    const float S = currentScale;
+
+    // Helpers : coordonnées base × S
+    auto sc = [S](int v) { return (int)(v * S); };
+
     // ── Façade : knob 94px + textbox 20px = 114px, centré dans 136px → x+21 ──
     const int modX[5] = { 24, 168, 312, 456, 600 };
-    int sKnobY = 95;
-    int sLabelY = 95 + 114 + 5; // sous la textbox : 214
+    int sKnobY  = sc(123);
+    int sLabelY = sc(242);
 
     ModernSlider* facadeSliders[5] = {
         &cleanSlider, &roomSlider, &reverbSlider, &deEssSlider, &airSlider
     };
     for (int i = 0; i < 5; ++i)
     {
-        facadeSliders[i]->slider.setBounds(modX[i] + 21, sKnobY, 94, 114);
-        facadeSliders[i]->label.setBounds(modX[i], sLabelY, 136, 14);
+        facadeSliders[i]->slider.setBounds(sc(modX[i] + 21), sKnobY, sc(94), sc(114));
+        facadeSliders[i]->label.setBounds(sc(modX[i]), sLabelY, sc(136), sc(14));
     }
 
     // ── BYP et △ dans chaque module ──────────────────────────────────────────
-    // BYP: coin sup-gauche, △: coin sup-droit, tous deux à y=69 (dans la carte)
-    int bY = 69, bW = 26, bH = 14;
+    int bY = sc(97), bW = sc(26), bH = sc(14);
     CustomButton* bypBtns[5] = {
         &cleanBypassBtn, &roomBypassBtn, &reverbBypassBtn, &deEssBypassBtn, &airBypassBtn
     };
@@ -2497,13 +3834,48 @@ void InvisibleFixAudioProcessorEditor::resized()
     };
     for (int i = 0; i < 5; ++i)
     {
-        bypBtns[i]->button.setBounds(modX[i] + 8,            bY, bW, bH);
-        deltaBtns[i]->button.setBounds(modX[i] + 136 - 8 - 16, bY, 16, bH);
+        bypBtns[i]->button.setBounds(sc(modX[i] + 8),            bY, bW, bH);
+        deltaBtns[i]->button.setBounds(sc(modX[i] + 136 - 24), bY, sc(16), bH);
     }
 
     // ── Master gain ───────────────────────────────────────────────────────────
-    masterGainLabel.setBounds(getWidth() - 200, 12, 80, 28);
-    masterGainSlider.setBounds(getWidth() - 116, 18, 92, 20);
+    // Master Gain : label + boite draggable verticale compacte
+    masterGainLabel .setBounds(sc(580), sc(42), sc(80),  sc(16));
+    masterGainSlider.setBounds(sc(666), sc(36), sc(28),  sc(28));
+    // Bypass global : couvre le wordmark INVISIBLE●FIX (x=22, y=40, 160×28 en virtuel)
+    globalBypassBtn .setBounds(sc(22), sc(40), sc(160), sc(28));
+
+    // ── Sliders gain entrée/sortie invisibles (sur les barres meter) ─────────
+    inputGainSlider .setBounds(sc(32),  sc(5), sc(8), sc(18));
+    outputGainSlider.setBounds(sc(744), sc(5), sc(8), sc(18));
+
+    // ── Barre preset Arturia — 28px, layout centré ────────────────────────────
+    // Indicateur scale — coin bas-droit, toujours visible (position dynamique)
+    scaleBtn.setButtonText(juce::String(juce::roundToInt(currentScale * 100)) + " %");
+    scaleBtn.setBounds(getWidth() - sc(62), getHeight() - sc(22), sc(58), sc(18));
+
+    // A/B Snapshot — à gauche du undo/redo
+    abBtnA   .setBounds(getWidth() - sc(212), getHeight() - sc(22), sc(24), sc(18));
+    abArrowBtn.setBounds(getWidth() - sc(186), getHeight() - sc(22), sc(36), sc(18));
+    abBtnB   .setBounds(getWidth() - sc(148), getHeight() - sc(22), sc(24), sc(18));
+
+    // Undo / Redo — coin bas-droit, à gauche du bouton scale
+    undoBtn.setBounds(getWidth() - sc(122), getHeight() - sc(22), sc(28), sc(18));
+    redoBtn.setBounds(getWidth() - sc(92),  getHeight() - sc(22), sc(28), sc(18));
+
+    presetTypeLabel .setVisible(false);
+    liveHQBtn.setBounds(sc(644), sc(4), sc(68), sc(20));
+    prevPresetBtn   .setBounds(sc(202), sc(2),  sc(24), sc(24));
+    presetNameLabel .setBounds(sc(228), sc(0),  sc(302),sc(28));
+    nextPresetBtn   .setBounds(sc(534), sc(2),  sc(24), sc(24));
+    savePresetBtn   .setBounds(sc(534), sc(6),  sc(52), sc(16));
+    initPresetBtn   .setBounds(sc(590), sc(6),  sc(52), sc(16));
+    // Bouton Browse (≡) à GAUCHE de la barre preset
+    browsePresetBtn .setBounds(sc(4),   sc(4),  sc(24), sc(20));
+
+    // Panel browser : prend toute la hauteur sous la barre preset
+    if (presetBrowser != nullptr)
+        presetBrowser->setBounds(sc(160), sc(28), sc(440), sc(280));
 
     // ── Masquer tous les contrôles advanced ──────────────────────────────────
     if (roomVisualizer != nullptr) roomVisualizer->setVisible(false);
@@ -2511,24 +3883,40 @@ void InvisibleFixAudioProcessorEditor::resized()
     auto hideSlider = [](ModernSlider& ms) {
         ms.slider.setVisible(false); ms.label.setVisible(false);
     };
-    hideSlider(advRoomFreqSlider);  hideSlider(advRoomQSlider);
+    hideSlider(advRoomFreqSlider);  hideSlider(advRoomQSlider);  hideSlider(advRoomDepthBoostSlider);
     hideSlider(advDeEssFreqSlider); hideSlider(advDeEssThreshSlider);
     hideSlider(advDeEssIntenSlider); hideSlider(advDeEssAtkSlider);
     hideSlider(advDeEssRelSlider);  hideSlider(advDeEssDetectSlider);
     hideSlider(advGateFloorSlider); hideSlider(advCleanRelSlider);
     hideSlider(advGateThresholdSlider); hideSlider(advGateAttackSlider);
     hideSlider(advGateHoldSlider);
+    hideSlider(plosiveProtectSlider);
     hideSlider(advAirDriveSlider);
     hideSlider(nrThreshSlider); hideSlider(nrRatioSlider);
     hideSlider(nrFloorSlider);  hideSlider(nrSmoothSlider);
+    hideSlider(nrArtifactBlendSlider);
+    hideSlider(deRevFloorSlider);
+    hideSlider(deRevBandLFSlider);
+    hideSlider(deRevBandMFSlider);
+    hideSlider(deRevBandHFSlider);
+    if (deRevCanvas) deRevCanvas->setVisible(false);
+    deRevLinkBtn.setVisible(false);
     deEssModeBtn.button.setVisible(false);
     advAirFreqSlider.setVisible(false);
     airCharacterLabel.setVisible(false);
+    airSatTriodeBtn.setVisible(false);
+    airSatClassABtn.setVisible(false);
+    airSatTapeBtn  .setVisible(false);
+    airSatIronBtn  .setVisible(false);
+    advAirShapeSlider.setVisible(false);
+    advAirShapeLabel .setVisible(false);
 
     // Cacher les nouveaux composants graphiques par défaut
     if (nrDualRail   != nullptr) nrDualRail->setVisible(false);
     if (nrBandDisplay != nullptr) nrBandDisplay->setVisible(false);
     nrLearnBtn.setVisible(false);
+    nrBypassBtn.setVisible(false);
+    gateBypassBtn.setVisible(false);
     gateAutoBtn.setVisible(false);
     if (gateDualRail  != nullptr) gateDualRail->setVisible(false);
     if (gateWaveform  != nullptr) gateWaveform->setVisible(false);
@@ -2557,50 +3945,44 @@ void InvisibleFixAudioProcessorEditor::resized()
         //   Horiz sliders: y=367 and y=386, x=162, w=104 + textbox 36px
         if (nrBandDisplay != nullptr) {
             nrBandDisplay->setVisible(true);
-            nrBandDisplay->setBounds(34, 293, 118, 116);
+            nrBandDisplay->setBounds(sc(34), sc(321), sc(266), sc(116));
         }
-        // Sensitivity knob (nrThreshSlider)
-        nrThreshSlider.slider.setVisible(true);
-        nrThreshSlider.label.setVisible(true);
-        nrThreshSlider.slider.setBounds(162, 293, 44, 55);
-        nrThreshSlider.label.setBounds(158, 350, 52, 10);
-        // Reduction knob (nrFloorSlider)
-        nrFloorSlider.slider.setVisible(true);
-        nrFloorSlider.label.setVisible(true);
-        nrFloorSlider.slider.setBounds(222, 293, 44, 55);
-        nrFloorSlider.label.setBounds(218, 350, 52, 10);
-        // Curve slider (nrRatioSlider) — horizontal
-        nrRatioSlider.slider.setVisible(true);
-        nrRatioSlider.label.setVisible(true);
-        nrRatioSlider.slider.setBounds(162, 367, 104, 14);
-        nrRatioSlider.label.setBounds(268, 367, 38, 14);
-        // Speed slider (nrSmoothSlider) — horizontal
-        nrSmoothSlider.slider.setVisible(true);
-        nrSmoothSlider.label.setVisible(true);
-        nrSmoothSlider.slider.setBounds(162, 386, 104, 14);
-        nrSmoothSlider.label.setBounds(268, 386, 38, 14);
-        // Bouton LEARN — pill dans le header du panel NR (top-right)
+        // nrThreshSlider and nrFloorSlider are now controlled by NRSpectrumDisplay drag
+        // keep them hidden — nrRatioSlider and nrSmoothSlider remain
+        nrRatioSlider.slider.setVisible(true);  nrRatioSlider.label.setVisible(true);
+        nrRatioSlider.slider.setBounds(sc(34), sc(445), sc(260), sc(14));
+        nrRatioSlider.label.setBounds(sc(296), sc(445), sc(38),  sc(14));
+        nrSmoothSlider.slider.setVisible(true); nrSmoothSlider.label.setVisible(true);
+        nrSmoothSlider.slider.setBounds(sc(34), sc(463), sc(260), sc(14));
+        nrSmoothSlider.label.setBounds(sc(296), sc(463), sc(38),  sc(14));
         nrLearnBtn.setVisible(true);
-        nrLearnBtn.setBounds(248, 286, 54, 13);
+        nrLearnBtn.setBounds(sc(248), sc(314), sc(54), sc(13));
+        nrBypassBtn.setVisible(true);
+        nrBypassBtn.setBounds(sc(34), sc(314), sc(60), sc(13));
+        nrArtifactBlendSlider.slider.setVisible(true);
+        nrArtifactBlendSlider.label .setVisible(true);
+        nrArtifactBlendSlider.slider.setBounds(sc(304), sc(346), sc(34), sc(50));
+        nrArtifactBlendSlider.label .setBounds(sc(300), sc(398), sc(42), sc(11));
 
-        // ── Gate panel: x=334, y=281, w=402, h=155 ───────────────────────────
-        // Waveform RMS (gauche)  : x=342, w=186, h=122
-        // AHR sliders+ghost (droite): x=534, w=192, h=122
-        // AUTO button (bas, pleine largeur): x=342, w=384, h=16
-        // AUTO — pill dans le header du panel Gate (top-right)
         gateAutoBtn.setVisible(true);
-        gateAutoBtn.setBounds(662, 286, 54, 13);
-        // Waveform + AHR s'étendent maintenant sur toute la hauteur utile
+        gateAutoBtn.setBounds(sc(662), sc(314), sc(54), sc(13));
+        gateBypassBtn.setVisible(true);
+        gateBypassBtn.setBounds(sc(342), sc(314), sc(66), sc(13));
         if (gateWaveform != nullptr) {
             gateWaveform->setVisible(true);
-            gateWaveform->setBounds(342, 298, 186, 130);
+            gateWaveform->setBounds(sc(342), sc(326), sc(186), sc(130));
         }
-        if (gateDualRail != nullptr)
-            gateDualRail->setVisible(false);
+        if (gateDualRail != nullptr) gateDualRail->setVisible(false);
         if (gateAHR != nullptr) {
             gateAHR->setVisible(true);
-            gateAHR->setBounds(534, 298, 192, 130);
+            gateAHR->setBounds(sc(534), sc(326), sc(192), sc(130));
         }
+
+        // Plosive protection knob (sous gateAHR)
+        plosiveProtectSlider.slider.setVisible(true);
+        plosiveProtectSlider.label .setVisible(true);
+        plosiveProtectSlider.slider.setBounds(sc(668), sc(462), sc(44), sc(36));
+        plosiveProtectSlider.label .setBounds(sc(656), sc(500), sc(68), sc(11));
     }
     else if (currentTab == AdvancedTab::Room)
     {
@@ -2609,17 +3991,17 @@ void InvisibleFixAudioProcessorEditor::resized()
         if (roomVisualizer != nullptr) {
             addAndMakeVisible(roomVisualizer.get());
             roomVisualizer->setVisible(true);
-            roomVisualizer->setBounds(58, 309, 296, 112);
+            roomVisualizer->setBounds(sc(58), sc(337), sc(296), sc(112));
         }
-        // Knobs dans le panneau droit (rpX=364, labels à rpY+26=307)
-        // NOTCH FREQ : x=rpX+16=380, knob y=rpY+38=319, 50x66
-        // NOTCH Q   : x=rpX+112=476, knob y=319, 50x66
         advRoomFreqSlider.slider.setVisible(true); advRoomFreqSlider.label.setVisible(true);
         advRoomQSlider.slider.setVisible(true);    advRoomQSlider.label.setVisible(true);
-        advRoomFreqSlider.slider.setBounds(380, 319, 50, 66);
-        advRoomFreqSlider.label.setBounds(378, 387, 54, 10);
-        advRoomQSlider.slider.setBounds(476, 319, 50, 66);
-        advRoomQSlider.label.setBounds(474, 387, 54, 10);
+        advRoomFreqSlider.slider.setBounds(sc(380), sc(347), sc(50), sc(66));
+        advRoomFreqSlider.label.setBounds(sc(378), sc(415), sc(54), sc(10));
+        advRoomQSlider.slider.setBounds(sc(476), sc(347), sc(50), sc(66));
+        advRoomQSlider.label.setBounds(sc(474), sc(415), sc(54), sc(10));
+        advRoomDepthBoostSlider.slider.setVisible(true); advRoomDepthBoostSlider.label.setVisible(true);
+        advRoomDepthBoostSlider.slider.setBounds(sc(572), sc(347), sc(50), sc(66));
+        advRoomDepthBoostSlider.label.setBounds(sc(570), sc(415), sc(54), sc(10));
     }
     else if (currentTab == AdvancedTab::DeEss)
     {
@@ -2629,39 +4011,68 @@ void InvisibleFixAudioProcessorEditor::resized()
         // → Intensity slider vertical: x=628, y=289, w=96, h=108
         if (deEssDetect != nullptr) {
             deEssDetect->setVisible(true);
-            deEssDetect->setBounds(34, 289, 360, 84);
+            deEssDetect->setBounds(sc(34), sc(317), sc(360), sc(84));
         }
-        // Slider Q (deEssDetectRatio) horizontal sous le display de détection
         {
-            advDeEssDetectSlider.slider.setBounds(34, 376, 318, 16);
-            advDeEssDetectSlider.label.setBounds(354, 376, 18, 16);
+            advDeEssDetectSlider.slider.setBounds(sc(34), sc(404), sc(318), sc(16));
+            advDeEssDetectSlider.label.setBounds(sc(354), sc(404), sc(18), sc(16));
             advDeEssDetectSlider.slider.setVisible(true);
             advDeEssDetectSlider.label.setVisible(true);
         }
         if (deEssAR != nullptr) {
             deEssAR->setVisible(true);
-            deEssAR->setBounds(402, 289, 218, 108);
+            deEssAR->setBounds(sc(402), sc(317), sc(218), sc(108));
         }
         {
             auto show = [](ModernSlider& ms) { ms.slider.setVisible(true); ms.label.setVisible(true); };
-            // Slider vertical Intensity : pleine hauteur à droite du panel
-            advDeEssIntenSlider.slider.setBounds(630, 293, 30, 88);
-            advDeEssIntenSlider.label.setBounds(618, 383, 54, 10);
+            advDeEssIntenSlider.slider.setBounds(sc(630), sc(321), sc(30), sc(88));
+            advDeEssIntenSlider.label.setBounds(sc(618), sc(411), sc(54), sc(10));
             show(advDeEssIntenSlider);
         }
     }
+    else if (currentTab == AdvancedTab::DeRev)
+    {
+        // Canvas dual-axis : remplace les 4 knobs
+        if (deRevCanvas != nullptr)
+        {
+            deRevCanvas->setVisible(true);
+            deRevCanvas->setBounds(sc(32), sc(295), sc(614), sc(128));
+        }
+        // Knob Floor à droite du canvas
+        deRevFloorSlider.slider.setVisible(true);
+        deRevFloorSlider.label .setVisible(true);
+        deRevFloorSlider.slider.setBounds(sc(656), sc(299), sc(50), sc(66));
+        deRevFloorSlider.label .setBounds(sc(654), sc(367), sc(54), sc(10));
+        // Bouton LINK sous le knob Floor
+        deRevLinkBtn.setVisible(true);
+        deRevLinkBtn.setBounds(sc(656), sc(387), sc(52), sc(18));
+    }
     else if (currentTab == AdvancedTab::Air)
     {
-        // Canvas spectre : sY=302, sH=72 → bottom=374; slider: y=374+14-10=378, h=20
         advAirFreqSlider.setVisible(true);
         advAirDriveSlider.slider.setVisible(true);
         advAirDriveSlider.label.setVisible(true);
         airCharacterLabel.setVisible(false);
-        // slider centré sur la même plage que le canvas (sX=38, sW=414)
-        advAirFreqSlider.setBounds(38, 378, 414, 20);
-        // Air Drive : colonne droite (x=464+107=571 centré dans 264px → x=571)
-        advAirDriveSlider.slider.setBounds(556, 302, 50, 66);
-        advAirDriveSlider.label.setBounds(556, 370, 60, 10);
+        advAirFreqSlider.setBounds(sc(38), sc(406), sc(414), sc(20));
+        // HEAT knob — à gauche de la zone droite
+        advAirDriveSlider.slider.setBounds(sc(464), sc(294), sc(50), sc(66));
+        advAirDriveSlider.label.setBounds(sc(460), sc(362), sc(58), sc(10));
+
+        // SAT TYPE buttons — 2x2 à droite du knob Heat
+        airSatTriodeBtn.setVisible(true);
+        airSatClassABtn.setVisible(true);
+        airSatTapeBtn  .setVisible(true);
+        airSatIronBtn  .setVisible(true);
+        airSatTriodeBtn.setBounds(sc(520), sc(292), sc(98), sc(19));
+        airSatClassABtn.setBounds(sc(622), sc(292), sc(98), sc(19));
+        airSatTapeBtn  .setBounds(sc(520), sc(315), sc(98), sc(19));
+        airSatIronBtn  .setBounds(sc(622), sc(315), sc(98), sc(19));
+
+        // TRANSIENT SHAPE — slider bipolaire dans un cadre bleuté sous l'ensemble
+        advAirShapeLabel .setVisible(true);
+        advAirShapeSlider.setVisible(true);
+        advAirShapeLabel .setBounds(sc(464), sc(372), sc(264), sc(11));
+        advAirShapeSlider.setBounds(sc(468), sc(385), sc(256), sc(20));
     }
 }
 
@@ -2672,7 +4083,8 @@ void InvisibleFixAudioProcessorEditor::timerCallback()
     if (blinkCounter == 0)
     {
         bypassBlinkOn = !bypassBlinkOn;
-        bypassBtnLAF.blinkOn = bypassBlinkOn;
+        bypassBtnLAF.blinkOn   = bypassBlinkOn;
+        deltaButtonLAF.blinkOn = bypassBlinkOn;
     }
 
     // Repaint des boutons BYP actifs (clignotement rouge)
@@ -2681,6 +4093,44 @@ void InvisibleFixAudioProcessorEditor::timerCallback()
     for (auto* b : byps)
         if (b->button.getToggleState())
             b->button.repaint();
+
+    // Repaint des boutons DELTA actifs (clignotement bleu)
+    CustomButton* deltas[5] = { &deltaBtn, &roomDeltaBtn, &reverbDeltaBtn,
+                                 &deEssDeltaBtn, &airDeltaBtn };
+    for (auto* d : deltas)
+        if (d->button.getToggleState())
+            d->button.repaint();
+
+    // Blink global bypass (dot + FIX rouge)
+    if (audioProcessor.globalBypassActive.load())
+        repaint();
+
+    // Mise à jour bouton LIVE/HQ
+    {
+        bool live = *audioProcessor.apvts.getRawParameterValue("liveMode") > 0.5f;
+        liveHQBtn.setButtonText(live ? "LIVE" : "HQ");
+        liveHQBtn.setColour(juce::TextButton::buttonColourId,
+            live ? juce::Colour(0xFF3a1a00) : juce::Colour(0xFF0d2e28));
+        liveHQBtn.setColour(juce::TextButton::textColourOffId,
+            live ? juce::Colour(0xFFFF8C00) : juce::Colour(0xFF1bb89e));
+        liveHQBtn.repaint();
+    }
+
+    // Mise à jour visuelle des boutons SAT MODE (radio)
+    if (currentTab == AdvancedTab::Air)
+    {
+        int satMode = (int)*audioProcessor.apvts.getRawParameterValue("airSatMode");
+        juce::TextButton* satBtns[4] = { &airSatTriodeBtn, &airSatClassABtn, &airSatTapeBtn, &airSatIronBtn };
+        for (int i = 0; i < 4; ++i)
+        {
+            bool active = (i == satMode);
+            satBtns[i]->setColour(juce::TextButton::buttonColourId,
+                active ? juce::Colour(0xFF0e9ab8) : juce::Colour(0xFF1e3632));
+            satBtns[i]->setColour(juce::TextButton::textColourOffId,
+                active ? juce::Colours::white : juce::Colour(0xFF94a5a2));
+            satBtns[i]->repaint();
+        }
+    }
 
     // Synchronisation état bouton LEARN avec le flag DSP
     {
@@ -2719,7 +4169,7 @@ void InvisibleFixAudioProcessorEditor::timerCallback()
         {
             float signalDB = audioProcessor.gateCurrentLevelDB;
             // État gate vrai depuis le processeur (pas recalculé)
-            bool  gateOpen = audioProcessor.gateIsOpenForDisplay;
+            bool  gateOpen = audioProcessor.gateIsOpenForDisplay.load();
 
             // GR normalisé : uniquement quand gate fermé, basé sur le niveau RMS
             float grNorm = 0.0f;
@@ -2742,9 +4192,7 @@ void InvisibleFixAudioProcessorEditor::timerCallback()
                 ->pushSample(signalDB, gateOpen, grNorm);
 
             // ── Détection de vallée AUTO — avec lissage pour stabilité ───────
-            // Lissage exponentiel : ~5s de mémoire à 30 Hz (coeff = exp(-1/(5*30)))
-            static float smoothedValley = -40.0f;
-            static bool  hasValley      = false;
+            // Utilise des membres de classe (pas de static partagé entre instances)
 
             float hist[80], smooth[80]{};
             std::memcpy(hist, audioProcessor.gateHistogram, sizeof(hist));
@@ -2772,14 +4220,12 @@ void InvisibleFixAudioProcessorEditor::timerCallback()
                         if (smooth[i] < smooth[valley]) valley = i;
 
                     float rawValley = (float)valley - 80.0f;
-                    // Premier appel : initialiser sans historique
-                    if (!hasValley) { smoothedValley = rawValley; hasValley = true; }
-                    // Lissage lourd : ~5s à 30 Hz
-                    smoothedValley = smoothedValley * 0.993f + rawValley * 0.007f;
+                    if (!autoHasValley) { autoSmoothValley = rawValley; autoHasValley = true; }
+                    autoSmoothValley = autoSmoothValley * 0.993f + rawValley * 0.007f;
 
-                    audioProcessor.gateAutoThreshDB  = smoothedValley;
-                    audioProcessor.gateAutoZoneLow   = smoothedValley - 3.0f;
-                    audioProcessor.gateAutoZoneHigh  = smoothedValley + 3.0f;
+                    audioProcessor.gateAutoThreshDB  = autoSmoothValley;
+                    audioProcessor.gateAutoZoneLow   = autoSmoothValley - 3.0f;
+                    audioProcessor.gateAutoZoneHigh  = autoSmoothValley + 3.0f;
                     audioProcessor.gateAutoZoneValid  = true;
                     zoneValid = true;
                 }
@@ -2809,6 +4255,130 @@ void InvisibleFixAudioProcessorEditor::timerCallback()
         if (drv > 0.08f)
             repaint();
     }
+
+    // Repaint NR Spectrum (spectre FFT continu — necessite refresh periodique)
+    if (currentTab == AdvancedTab::Clean && nrBandDisplay != nullptr && nrBandDisplay->isVisible())
+        nrBandDisplay->repaint();
+
+    // Notch tracker Room : repaint continu pour mise à jour smooth temps réel
+    if (currentTab == AdvancedTab::Room)
+        repaint();
+
+    // ── Metering I/O — peak hold + repaint header ────────────────────────────
+    {
+        float rawIn  = audioProcessor.inputLevelDisplay.load();
+        float rawOut = audioProcessor.outputLevelDisplay.load();
+        meterInputPeak  = rawIn;
+        meterOutputPeak = rawOut;
+
+        const int   HOLD_FRAMES = 45;  // ~1.5s à 30 Hz
+        const float HOLD_DECAY  = 0.97f;
+
+        if (rawIn >= meterInputHold)       { meterInputHold = rawIn;  meterInputHoldTimer = HOLD_FRAMES; }
+        else if (meterInputHoldTimer > 0)    --meterInputHoldTimer;
+        else                                 meterInputHold *= HOLD_DECAY;
+
+        if (rawOut >= meterOutputHold)     { meterOutputHold = rawOut; meterOutputHoldTimer = HOLD_FRAMES; }
+        else if (meterOutputHoldTimer > 0)   --meterOutputHoldTimer;
+        else                                 meterOutputHold *= HOLD_DECAY;
+
+        repaint(0, 0, getWidth(), (int)(28.0f * currentScale)); // rafraîchit uniquement la barre preset
+    }
+}
+
+void InvisibleFixAudioProcessorEditor::mouseMove(const juce::MouseEvent& e)
+{
+    const float S = juce::jmax(0.01f, currentScale);
+    // Les coordonnees sont dans l'espace du plugin (les modules sont decales de 28px preset bar)
+    const float vx = (float)e.x / S;
+    const float vy = (float)e.y / S - 28.0f; // -28 pour ignorer la barre preset
+
+    struct TooltipEntry { float x, y, w, h; const char* param; const char* desc; };
+    // Zones principales (modules facade)
+    static const TooltipEntry zones[] = {
+        // Modules
+        {  24,  58, 136, 200, "CLEAN",              "Reducteur de bruit adaptatif + gate intelligent 3 bandes" },
+        { 168,  58, 136, 200, "ROOM",               "Notch dynamique : reduit les resonances de piece en temps reel" },
+        { 312,  58, 136, 200, "DE-REV",             "Suppresseur de reverb 3 bandes, style Cedar DNS" },
+        { 456,  58, 136, 200, "DE-ESS",             "Suppresseur de sibilances adaptatif avec look-ahead 2ms" },
+        { 600,  58, 136, 200, "AIR ENHANCER",       "Shelf haute frequence + excitateur harmonique (Drive)" },
+        // Header
+        {  22,  40, 160,  28, "BYPASS GLOBAL",      "Active/desactive tous les modules simultanement (A/B)" },
+        { 580,  40, 120,  28, "MASTER GAIN",        "Gain de sortie global en dB (drag vertical)" },
+        // Barre preset (vy < -18 = zone preset bar)
+        { 202, -26, 356,  26, "PRESET",             "Preset actif. Clic double pour renommer. Fleches pour naviguer." },
+    };
+
+    juce::String newParam, newDesc;
+    for (auto& t : zones) {
+        if (vx >= t.x && vx < t.x + t.w && vy >= t.y && vy < t.y + t.h) {
+            newParam = t.param; newDesc = t.desc; break;
+        }
+    }
+
+    // Detection sur les composants JUCE via getName()
+    if (newParam.isEmpty()) {
+        struct CompTip { const char* name; const char* param; const char* desc; };
+        static const CompTip compTips[] = {
+            { "advRoomFreqSlider",    "ROOM FREQ",       "Frequence cible du notch dynamique (Hz)" },
+            { "advRoomQSlider",       "ROOM Q",          "Selectivite du notch (Q eleve = bande etroite)" },
+            { "advDeEssFreqSlider",   "DE-ESS FREQ",     "Centre de la zone de detection sibilante (Hz)" },
+            { "advDeEssThreshSlider", "DE-ESS THRESH",   "Seuil de declenchement en dB (niveau minimum)" },
+            { "advDeEssIntenSlider",  "DE-ESS INTENSITY","Intensite de la reduction (ratio de compression)" },
+            { "advDeEssAtkSlider",    "DE-ESS ATTACK",   "Temps d'attaque du detecteur (ms)" },
+            { "advDeEssRelSlider",    "DE-ESS RELEASE",  "Temps de relachement du detecteur (ms)" },
+            { "advDeEssDetectSlider", "DE-ESS WIDTH",    "Largeur de detection : bas=large/tolerant, haut=etroit/chirurgical (ratio spectral Weiss)" },
+            { "advGateThresholdSlider","GATE THRESHOLD", "Seuil de declenchement du gate (dBFS)" },
+            { "advGateAttackSlider",  "GATE ATTACK",     "Temps d'ouverture du gate (ms)" },
+            { "advGateHoldSlider",    "GATE HOLD",       "Temps de maintien apres fermeture (ms)" },
+            { "advGateFloorSlider",   "GATE FLOOR",      "Attenuation minimale quand gate ferme (dB)" },
+            { "advCleanRelSlider",    "GATE RELEASE",    "Temps de fermeture du gate (ms)" },
+            { "plosiveProtectSlider", "PLOSIVE PROTECT", "Protege les plosives (P, B, T) contre la fermeture abusive du gate. 0=desactive, 1=tres sensible." },
+            { "nrThreshSlider",       "NR THRESHOLD",    "Seuil de reduction du bruit (dB) - drag sur spectre aussi" },
+            { "nrFloorSlider",        "NR FLOOR",        "Niveau plancher de reduction (dB) - drag sur spectre aussi" },
+            { "nrRatioSlider",        "NR CURVE",        "Courbe de reduction (ratio compression)" },
+            { "nrSmoothSlider",       "NR SMOOTH",       "Lissage temporel de la reduction (evite les artefacts)" },
+            { "deRevFloorSlider",   "DE-REV FLOOR", "Limite la reduction maximale du DE-REV par bande" },
+            { "deRevBandLFSlider", "DE-REV LF",    "Intensite de reduction sur les basses (<500 Hz) — bas = preserv basses, haut = retire rumble de salle" },
+            { "deRevBandMFSlider", "DE-REV MF",    "Intensite de reduction sur les mediums (500-4000 Hz) — zone vocale principale" },
+            { "deRevBandHFSlider", "DE-REV HF",    "Intensite de reduction sur les aigus (>4000 Hz) — shimmer et brillance de salle" },
+            { "advAirDriveSlider",    "AIR DRIVE",       "Intensite de l'excitateur harmonique haute frequence" },
+            { "advAirShapeSlider",    "TRANSIENT SHAPE",  "+ boost les attaques (intelligibilite, presence) / - adoucit les transitoires (chaleur, naturel)" },
+            { "nrArtifactBlendSlider","NR ARTIFACT BLEND","Melange vers une reduction plus douce pour limiter les artefacts de pompage" },
+            { "airSatTriodeBtn",      "TRIODE",           "Tube triode (ref. Neve 1073, Manley) - harmoniques paires (2e), chaleur asymetrique" },
+            { "airSatClassABtn",      "CLASS-A",          "Ampli classe A transistor (ref. SSL 4000, API) - harmoniques impaires (3e), mordant" },
+            { "airSatTapeBtn",        "TAPE",             "Bande magnetique (ref. Ampex ATR, Studer A800) - saturation tres douce, densite" },
+            { "airSatIronBtn",        "IRON",             "Transformateur de sortie (ref. Neve/Carnhill, API 2520) - genou net, caractere" },
+        };
+
+        auto* comp = getComponentAt(e.x, e.y);
+        if (comp && comp != this) {
+            auto n = comp->getName();
+            for (auto& ct : compTips) {
+                if (n == ct.name) { newParam = ct.param; newDesc = ct.desc; break; }
+            }
+            // Fallback : boutons bypass et delta
+            if (newParam.isEmpty()) {
+                const char* byNames[5] = { "BYP CLEAN","BYP ROOM","BYP DE-REV","BYP DE-ESS","BYP AIR" };
+                const char* byDescs[5] = {
+                    "Bypass module CLEAN (le bruit passe sans traitement)",
+                    "Bypass module ROOM (le notch est desactive)",
+                    "Bypass module DE-REV (la reverb n'est pas traitee)",
+                    "Bypass module DE-ESS (les sibilances passent sans traitement)",
+                    "Bypass module AIR (le shelf et le drive sont desactives)"
+                };
+                CustomButton* byps[5] = { &cleanBypassBtn, &roomBypassBtn, &reverbBypassBtn, &deEssBypassBtn, &airBypassBtn };
+                for (int i = 0; i < 5; ++i)
+                    if (comp == &byps[i]->button) { newParam = byNames[i]; newDesc = byDescs[i]; break; }
+            }
+        }
+    }
+
+    if (newParam != currentTooltipParam || newDesc != currentTooltipText) {
+        currentTooltipParam = newParam;
+        currentTooltipText  = newDesc;
+        repaint();
+    }
 }
 
 void InvisibleFixAudioProcessorEditor::updateBypassAlphas()
@@ -2827,23 +4397,32 @@ void InvisibleFixAudioProcessorEditor::updateBypassAlphas()
 
 void InvisibleFixAudioProcessorEditor::mouseUp(const juce::MouseEvent& event)
 {
-    juce::Point<int> clickPos = event.getPosition();
+    // Convertir le clic (px écran) → espace virtuel (base 760px, hors preset bar 28px)
+    // screen = (virtual + 28) * S   →   virtual = screen/S - 28
+    const float S = juce::jmax(0.01f, currentScale);
+    const juce::Point<float> vClick(
+        event.getPosition().x / S,
+        event.getPosition().y / S - 28.0f
+    );
+
     AdvancedTab clickedTab = AdvancedTab::None;
 
-    // Zones de clic : 5 modules x=[24,168,312,456,600] w=136, y=58 h=200
-    if      (juce::Rectangle<int>( 24, 58, 136, 200).contains(clickPos)) clickedTab = AdvancedTab::Clean;
-    else if (juce::Rectangle<int>(168, 58, 136, 200).contains(clickPos)) clickedTab = AdvancedTab::Room;
-    else if (juce::Rectangle<int>(456, 58, 136, 200).contains(clickPos)) clickedTab = AdvancedTab::DeEss;
-    else if (juce::Rectangle<int>(600, 58, 136, 200).contains(clickPos)) clickedTab = AdvancedTab::Air;
+    // Zones virtuelles (coordonnées de base 760px) : w=136, y=58 h=200
+    if      (juce::Rectangle<float>( 24, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::Clean;
+    else if (juce::Rectangle<float>(168, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::Room;
+    else if (juce::Rectangle<float>(312, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::DeRev;
+    else if (juce::Rectangle<float>(456, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::DeEss;
+    else if (juce::Rectangle<float>(600, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::Air;
 
     if (clickedTab != AdvancedTab::None)
     {
         if (currentTab == clickedTab) currentTab = AdvancedTab::None;
         else                          currentTab = clickedTab;
 
-        if (currentTab == AdvancedTab::None)  setSize(760, 290);
-        else if (currentTab == AdvancedTab::Clean) setSize(760, 456);
-        else                                  setSize(760, 430);
+        const float S = currentScale;
+        if (currentTab == AdvancedTab::None)       setSize((int)(760*S), (int)(338*S));
+        else if (currentTab == AdvancedTab::Clean) setSize((int)(760*S), (int)(504*S));
+        else                                       setSize((int)(760*S), (int)(478*S));
 
         resized();
         repaint();
