@@ -58,7 +58,9 @@ InvisibleFixAudioProcessor::InvisibleFixAudioProcessor()
 #endif
 {
     // Chaque geste (mouseUp sur slider, clic bouton) = une étape undo indépendante
-    undoManager.setMaxNumberOfStoredUnits(50, 0);
+    // maxNumberOfUnitsToKeep : chaque float stocke ~15 "unités" (longueur string)
+    // minimumTransactionsToKeep : garde toujours au moins 50 transactions (undo steps)
+    undoManager.setMaxNumberOfStoredUnits(30000000, 50);
     buildPresetList();
     currentPresetName      = presetNames.empty() ? "Init" : presetNames[0];
     currentPresetIsFactory = true;
@@ -415,9 +417,11 @@ void InvisibleFixAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, 
         dynNotchSmoothedDepth = dynNotchSmoothedDepth * smoothCoef
                               + targetDepth * (1.0f - smoothCoef);
 
-        // Profondeur effective — auto-depth sans plancher + multiplicateur boost
+        // Profondeur effective — plancher passif 28% + boost
+        // Le plancher évite le saut brutal quand le traitement dynamique s'active
         float roomDepthBoost = *apvts.getRawParameterValue("roomDepthBoost");
-        float effectiveDepth = knobRoom * dynNotchSmoothedDepth;
+        constexpr float kPassiveFloor = 0.28f;
+        float effectiveDepth = knobRoom * juce::jmax(kPassiveFloor, dynNotchSmoothedDepth);
         float effectiveQ     = (float)currentRoomQ;
 
         // Recalcul des coefficients si freq ou depth ont bougé
@@ -1467,6 +1471,7 @@ void InvisibleFixAudioProcessor::changeProgramName(int, const juce::String&) {}
 void InvisibleFixAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
+    state.setProperty("editorScale", (double)editorScale.load(), nullptr);
     std::unique_ptr<juce::XmlElement> xml(state.createXml());
     copyXmlToBinary(*xml, destData);
 }
@@ -1475,7 +1480,11 @@ void InvisibleFixAudioProcessor::setStateInformation(const void* data, int sizeI
 {
     std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
     if (xmlState != nullptr && xmlState->hasTagName(apvts.state.getType()))
-        apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
+    {
+        auto vt = juce::ValueTree::fromXml(*xmlState);
+        editorScale.store((float)(double)vt.getProperty("editorScale", 1.0));
+        apvts.replaceState(vt);
+    }
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout InvisibleFixAudioProcessor::createParameterLayout()

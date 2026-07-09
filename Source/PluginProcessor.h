@@ -61,6 +61,9 @@ public:
     // APVTS Public pour les liaisons de l'interface (Attachments)
     juce::AudioProcessorValueTreeState apvts;
 
+    // Scale de l'éditeur (persiste entre sessions via getState/setState)
+    std::atomic<float> editorScale{1.0f};
+
     // NR Snapshot — accès public pour l'UI (atomics thread-safe)
     bool  nrSnapshotActive{ false };
     std::atomic<bool> nrSnapshotRequest{ false };
