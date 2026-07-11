@@ -110,7 +110,7 @@
 </main>
 
 <script>
-const GROUPS={facade:'#8e7bd6',text:'#cddd7a',btn:'#9fb0ab',preset:'#6fb0c0',nr:'#1bb89e',gate:'#13add6',hidden:'#f2a33c',room:'#4bb58a',deess:'#c56fa0',derev:'#e0864a',air:'#7fb0e0'};
+const GROUPS={facade:'#8e7bd6',text:'#cddd7a',btn:'#9fb0ab',preset:'#6fb0c0',nr:'#1bb89e',gate:'#13add6',hidden:'#f2a33c',room:'#4bb58a',deess:'#c56fa0',derev:'#e0864a',air:'#7fb0e0',paint:'#b98cd6'};
 const BASE_W=760, SNAP=5, PROJECT='InvisibleFix';
 let data=null, S=0.85, curState=null, sel=null, mode='edit', snapOn=true;
 let drag=null, hist={stack:[],idx:-1};
@@ -121,14 +121,49 @@ const $=id=>document.getElementById(id);
 
 // ---------- boot ----------
 async function boot(){
+  // Plus de garde de version : migrate() réconcilie n'importe quelle vieille structure
+  // sur le SEED courant, donc l'autosave est toujours lu puis migré, jamais jeté.
   const saved=localStorage.getItem('spf.autosave.'+PROJECT);
   if(saved){ try{ data=JSON.parse(saved); }catch(e){} }
   if(!data){ try{ const r=await fetch('layout.json'); if(!r.ok)throw 0; data=await r.json(); }catch(e){ data=clone(SEED); } }
+  try{ data=migrate(data); }catch(e){ console.error('migrate() a échoué au démarrage, retour au layout par défaut',e); data=clone(SEED); }
   buildStateSelect(); buildLegend(); refreshVariants();
   curState=Object.keys(data.states)[0]; stateSel.value=curState;
   loadState(); resetHistory();
 }
 function clone(o){return JSON.parse(JSON.stringify(o));}
+// Fusion proactive : repart TOUJOURS de la structure courante (SEED) et y ré-applique
+// les positions/tailles/labels de l'ancienne sauvegarde, par id. → une vieille sauvegarde
+// récupère automatiquement toute nouvelle structure (panneaux, labels, calque global, ancrage),
+// tout en gardant les réglages de l'utilisateur pour les éléments qui existent encore.
+const arr=v=>Array.isArray(v)?v:[]; // tolère tout ce qui n'est pas un vrai tableau (undefined, objet, null…)
+function migrate(d){
+  const base=clone(SEED);
+  const saved={};
+  const rec=o=>{ if(o&&typeof o==='object'&&o.id!==undefined)saved[o.id]=o; };
+  if(d&&typeof d==='object'&&d.states&&typeof d.states==='object')
+    for(const k in d.states){
+      const s=d.states[k]; if(!s||typeof s!=='object')continue;
+      arr(s.zones).forEach(rec); arr(s.controls).forEach(rec);
+    }
+  if(d&&d.global&&typeof d.global==='object')arr(d.global.controls).forEach(rec);
+  const copyPos=dst=>{
+    const src=saved[dst.id]; if(!src||typeof src!=='object')return;
+    const keys = dst.anchor==='br' ? ['right','bottom','w','h']
+               : dst.anchor==='bottombar' ? ['bottom','h']
+               : ['x','y','w','h'];
+    keys.forEach(p=>{ if(typeof src[p]==='number')dst[p]=src[p]; });
+    if(typeof src.label==='string')dst.label=src.label;
+  };
+  for(const k in base.states){
+    arr(base.states[k].zones).forEach(copyPos);
+    arr(base.states[k].controls).forEach(copyPos);
+    const dh=d&&d.states&&d.states[k]&&d.states[k].height;
+    if(typeof dh==='number')base.states[k].height=dh;
+  }
+  if(base.global)arr(base.global.controls).forEach(copyPos);
+  return base;
+}
 function autosave(){localStorage.setItem('spf.autosave.'+PROJECT, JSON.stringify(data));}
 
 function buildStateSelect(){stateSel.innerHTML='';for(const k in data.states){const o=document.createElement('option');o.value=k;o.textContent=data.states[k].label;stateSel.appendChild(o);}}
@@ -151,6 +186,7 @@ function render(){ if(mode==='edit')renderEdit(); else if(mode==='graphic')rende
 function renderGraphic(){
   clearGuides(); clearStage();
   stage.style.background='linear-gradient(135deg,'+T('surfaceSky')+','+T('surfaceBlue')+')';
+  facadeGhost();
   // contrôles non-texte = fantômes (repères non interactifs)
   st().controls.forEach(c=>{ if(c.group==='text')return; const g=previewControl(c); g.style.pointerEvents='none'; g.style.opacity='.3'; stage.appendChild(g); });
   // panneaux peints = éditables, rendus comme dans le plugin
@@ -165,12 +201,14 @@ function renderGraphic(){
   });
   // objets texte = éditables
   st().controls.forEach(c=>{ if(c.group!=='text')return; const d=el('div','box'+(sel&&sel.kind==='box'&&sel.id===c.id?' sel':'')); place(d,c); d.dataset.box=c.id; d.style.background='rgba(205,221,101,.55)'; d.style.color='#1a2a1e'; d.textContent=c.label||c.id; const h=el('div','rh'); h.dataset.rh=c.id; d.appendChild(h); stage.appendChild(d); });
+  gctrls().forEach(editBox); // calque global (barre infobulle + boutons ancrés)
 }
 function renderList(){
   const L=$('elemList'); if(!L) return; L.innerHTML='';
   const rows=[];
   (st().zones||[]).forEach(z=>rows.push({kind:'zone',o:z,col:'#3a5c55',tag:'zone'}));
   st().controls.forEach(c=>rows.push({kind:'box',o:c,col:GROUPS[c.group]||'#888',tag:c.group}));
+  gctrls().forEach(c=>rows.push({kind:'box',o:c,col:GROUPS[c.group]||'#888',tag:'global'}));
   rows.forEach(r=>{
     const it=el('div','vitem');
     if(sel&&sel.kind===r.kind&&sel.id===r.o.id){it.style.borderColor='#fff';it.style.background='#1b3a40';}
@@ -180,28 +218,56 @@ function renderList(){
     L.appendChild(it);
   });
 }
-function place(d,o){d.style.left=(o.x*S)+'px';d.style.top=(o.y*S)+'px';d.style.width=(o.w*S)+'px';d.style.height=(o.h*S)+'px';}
+// Résout un élément (ancré ou non) en rectangle base {x,y,w,h} selon la hauteur courante
+function R(o){const H=st().height;
+  if(o.anchor==='br')        return {x:BASE_W-o.right, y:H-o.bottom, w:o.w, h:o.h};
+  if(o.anchor==='bottombar') return {x:0, y:H-o.bottom, w:BASE_W, h:o.h};
+  return {x:o.x, y:o.y, w:o.w, h:o.h};
+}
+function gctrls(){return (data.global&&data.global.controls)||[];}
+// Fantôme non-interactif de la façade, affiché en fond sur les onglets avancés (repère visuel,
+// pas éditable depuis là — la façade se modifie seulement dans son propre état).
+function facadeGhost(){
+  if(curState==='facade')return;
+  const fc=(data.states.facade&&data.states.facade.controls)||[];
+  fc.forEach(c=>{
+    const d=el('div'); d.style.position='absolute'; place(d,c); d.style.pointerEvents='none';
+    d.style.border='1px dashed rgba(255,255,255,.18)'; d.style.background='rgba(255,255,255,.03)';
+    d.style.color='rgba(255,255,255,.28)'; d.style.fontSize='9px'; d.style.display='flex';
+    d.style.alignItems='center'; d.style.justifyContent='center'; d.style.overflow='hidden';
+    d.textContent=c.label||c.id;
+    stage.appendChild(d);
+  });
+}
+function place(d,o){const r=R(o);d.style.left=(r.x*S)+'px';d.style.top=(r.y*S)+'px';d.style.width=(r.w*S)+'px';d.style.height=(r.h*S)+'px';}
 function el(t,c){const e=document.createElement('div');if(c)e.className=c;return e;}
 function clearStage(){[...stage.children].forEach(n=>{if(n.id!=='guides')n.remove();});}
+function editBox(c){
+  const d=el('div','box'+(sel&&sel.kind==='box'&&sel.id===c.id?' sel':''));place(d,c);d.dataset.box=c.id;
+  d.style.background=GROUPS[c.group]||'#888';d.style.border='1px solid rgba(0,0,0,.35)';
+  if(c.group==='text'||c.group==='paint')d.style.color='#1a2a1e';
+  if(c.anchor){d.style.borderStyle='dashed';d.style.borderColor='#fff';}
+  d.title=c.id+(c.anchor?' (ancré: '+c.anchor+')':'');d.textContent=c.label||c.id;
+  const h=el('div','rh');h.dataset.rh=c.id;d.appendChild(h);stage.appendChild(d);
+}
 
 function renderEdit(){
   stage.style.background='#0a1417';
   clearStage();
+  facadeGhost();
   (st().zones||[]).forEach(z=>{
     const d=el('div','zone'+(sel&&sel.kind==='zone'&&sel.id===z.id?' sel':''));place(d,z);d.dataset.zone=z.id;
     d.innerHTML='<span class="zl">'+esc(z.label||z.id)+'</span>';const h=el('div','zrh');h.dataset.zrh=z.id;d.appendChild(h);stage.appendChild(d);
   });
-  st().controls.forEach(c=>{
-    const d=el('div','box'+(sel&&sel.kind==='box'&&sel.id===c.id?' sel':''));place(d,c);d.dataset.box=c.id;
-    d.style.background=GROUPS[c.group]||'#888';d.style.border='1px solid rgba(0,0,0,.35)';if(c.group==='text')d.style.color='#1a2a1e';
-    d.title=c.id;d.textContent=c.label||c.id;const h=el('div','rh');h.dataset.rh=c.id;d.appendChild(h);stage.appendChild(d);
-  });
+  st().controls.forEach(editBox);
+  gctrls().forEach(editBox); // calque global (ancré) sur toutes les fenêtres
 }
 
 function renderPreview(){
   clearGuides();
   clearStage();
   stage.style.background='linear-gradient(135deg,'+T('surfaceSky')+','+T('surfaceBlue')+')';
+  facadeGhost();
   (st().zones||[]).forEach(z=>{
     const d=el('div');d.style.position='absolute';place(d,z);
     d.style.background=T('surfaceLight');d.style.border='1px solid '+rgba('textMuted',.5);d.style.borderRadius='6px';
@@ -209,6 +275,7 @@ function renderPreview(){
     stage.appendChild(d);
   });
   st().controls.forEach(c=>stage.appendChild(previewControl(c)));
+  gctrls().forEach(c=>stage.appendChild(previewControl(c)));
 }
 function previewControl(c){
   const d=el('div');d.style.position='absolute';place(d,c);d.style.overflow='hidden';
@@ -234,6 +301,12 @@ function previewControl(c){
     d.innerHTML='<svg width="'+w+'" height="'+h+'"><line x1="'+w/2+'" y1="3" x2="'+w/2+'" y2="'+(h-3)+'" stroke="'+rgba('textMuted',.5)+'" stroke-width="3"/>'
       +'<line x1="'+w/2+'" y1="'+(h*0.4)+'" x2="'+w/2+'" y2="'+(h-3)+'" stroke="'+T('teal')+'" stroke-width="3"/>'
       +'<circle cx="'+w/2+'" cy="'+(h*0.4)+'" r="'+Math.min(6,w*0.4)+'" fill="'+T('accent')+'"/></svg>';
+  }else if(ty==='tooltipbar'){ // barre infobulle — même style que le vrai paint() : fond clair + séparateur haut
+    d.style.background=T('surfaceBar');
+    d.style.borderTop='1px solid '+rgba('textMuted',.28);
+    d.style.display='flex';d.style.alignItems='center';
+    d.style.color=rgba('textMuted',.5);d.style.fontSize='9px';d.style.paddingLeft='10px';
+    d.textContent='Survoler un paramètre pour voir sa description';
   }else{ // display / canvas
     d.style.background=T('bgDeep');d.style.border='1px solid '+rgba('accent',.35);d.style.borderRadius='4px';
     d.style.display='flex';d.style.alignItems='center';d.style.justifyContent='center';
@@ -246,6 +319,7 @@ function arc(cx,cy,r,a0,a1){const p=(a)=>{const rad=(a-90)*Math.PI/180;return [c
 const TYPEMAP={masterGainSlider:'knob',plosiveProtectSlider:'knob',nrArtifactBlendSlider:'vslider',advDeEssIntenSlider:'vslider',nrRatioSlider:'hslider',nrSmoothSlider:'hslider',advDeEssDetectSlider:'hslider',advAirShapeSlider:'hslider',advAirFreqSlider:'hslider',nrBandDisplay:'display',gateWaveform:'display',gateAHR:'display',deEssDetect:'display',deEssAR:'display',roomVisualizer:'display',deRevCanvas:'display',globalBypassBtn:'button',presetNameLabel:'label'};
 function typeOf(c){
   if(TYPEMAP[c.id])return TYPEMAP[c.id];
+  if(c.group==='paint')return 'tooltipbar';
   if(c.group==='text'||/Label$/.test(c.id))return 'label';
   if(/Btn$/.test(c.id))return c.group==='air'?'pill':'button';
   if(/Slider$/.test(c.id)){ if(c.w>=2.2*c.h)return 'hslider'; if(c.h>=1.7*c.w)return 'vslider'; return 'knob'; }
@@ -305,7 +379,7 @@ stage.addEventListener('pointerdown',e=>{
   else if(t.dataset.zone||(t.parentElement&&t.parentElement.dataset.zone)){kind='zone';id=t.dataset.zone||t.parentElement.dataset.zone;m='move';}
   else{sel=null;render();showSel();return;}
   const o=find(kind,id);sel={kind,id};
-  drag={m,o,sx:e.clientX,sy:e.clientY,ox:o.x,oy:o.y,ow:o.w,oh:o.h,moved:false};
+  drag={m,o,sx:e.clientX,sy:e.clientY,ox:o.x,oy:o.y,ow:o.w,oh:o.h,oRight:o.right,oBottom:o.bottom,moved:false};
   t.setPointerCapture&&t.setPointerCapture(e.pointerId);render();showSel();e.preventDefault();
 });
 stage.addEventListener('pointermove',e=>{
@@ -314,8 +388,15 @@ stage.addEventListener('pointermove',e=>{
   const dx=Math.round((e.clientX-drag.sx)/S), dy=Math.round((e.clientY-drag.sy)/S);
   const o=drag.o,H=st().height;
   if(dx||dy)drag.moved=true;
-  if(drag.m==='move'){o.x=clamp(drag.ox+dx,0,BASE_W-o.w);o.y=clamp(drag.oy+dy,0,H-o.h);snapMove(o);}
-  else{o.w=clamp(drag.ow+dx,12,BASE_W-o.x);o.h=clamp(drag.oh+dy,8,H-o.y);snapResize(o);}
+  if(drag.m==='move'){
+    if(o.anchor==='br'){o.right=clamp(drag.oRight-dx,0,BASE_W-o.w);o.bottom=clamp(drag.oBottom-dy,0,H-o.h);clearGuides();}
+    else if(o.anchor==='bottombar'){o.bottom=clamp(drag.oBottom-dy,0,H-o.h);clearGuides();}
+    else{o.x=clamp(drag.ox+dx,0,BASE_W-o.w);o.y=clamp(drag.oy+dy,0,H-o.h);snapMove(o);}
+  }else{
+    if(o.anchor==='bottombar'){o.h=clamp(drag.oh+dy,8,H);clearGuides();}
+    else if(o.anchor){o.w=clamp(drag.ow+dx,12,BASE_W);o.h=clamp(drag.oh+dy,8,H);clearGuides();}
+    else{o.w=clamp(drag.ow+dx,12,BASE_W-o.x);o.h=clamp(drag.oh+dy,8,H-o.y);snapResize(o);}
+  }
   render();showSel();
 });
 function endDrag(){if(drag){clearGuides();if(drag.moved)pushHistory();drag=null;}}
@@ -337,7 +418,7 @@ window.addEventListener('keydown',e=>{
   if(used){e.preventDefault();render();showSel();pushHistory();}
 });
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
-function find(kind,id){const arr=kind==='zone'?(st().zones||[]):st().controls;return arr.find(o=>o.id===id);}
+function find(kind,id){if(kind==='zone')return (st().zones||[]).find(o=>o.id===id);return st().controls.find(o=>o.id===id)||gctrls().find(o=>o.id===id);}
 function esc(s){return(s+'').replace(/[<>&]/g,m=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[m]));}
 
 // ---------- selection panel ----------
@@ -366,14 +447,32 @@ window.addEventListener('resize',()=>{fitScale();render();});
 // ---------- variants (localStorage) ----------
 function vKey(){return 'spf.variants.'+PROJECT;}
 function getVariants(){try{return JSON.parse(localStorage.getItem(vKey()))||{};}catch(e){return{};}}
-function refreshVariants(){const v=getVariants();const L=$('vList');L.innerHTML='';const names=Object.keys(v);if(!names.length){L.innerHTML='<div class="hint">Aucune variante. Enregistre un état pour comparer plus tard.</div>';return;}names.forEach(n=>{const it=el('div','vitem');it.innerHTML='<span title="'+esc(n)+'">'+esc(n)+'</span>';const load=el('button');load.textContent='Charger';load.onclick=()=>{data=JSON.parse(v[n]);afterHistory();pushHistory();};const del=el('button');del.textContent='✕';del.onclick=()=>{const vv=getVariants();delete vv[n];localStorage.setItem(vKey(),JSON.stringify(vv));refreshVariants();};it.appendChild(load);it.appendChild(del);L.appendChild(it);});}
+function refreshVariants(){const v=getVariants();const L=$('vList');L.innerHTML='';const names=Object.keys(v);if(!names.length){L.innerHTML='<div class="hint">Aucune variante. Enregistre un état pour comparer plus tard.</div>';return;}names.forEach(n=>{const it=el('div','vitem');it.innerHTML='<span title="'+esc(n)+'">'+esc(n)+'</span>';const load=el('button');load.textContent='Charger';load.onclick=()=>{
+  try{
+    data=migrate(JSON.parse(v[n]));
+    afterHistory();pushHistory();
+  }catch(e){
+    alert('Impossible de charger la variante "'+n+'" :\n'+e.message+'\n\nMontre ce message à Claude pour qu\'il corrige migrate().');
+    console.error('Échec chargement variante', n, e);
+  }
+};const del=el('button');del.textContent='✕';del.onclick=()=>{const vv=getVariants();delete vv[n];localStorage.setItem(vKey(),JSON.stringify(vv));refreshVariants();};it.appendChild(load);it.appendChild(del);L.appendChild(it);});}
 $('vSave').addEventListener('click',()=>{const n=$('vName').value.trim();if(!n)return;const v=getVariants();v[n]=JSON.stringify(data);localStorage.setItem(vKey(),JSON.stringify(v));$('vName').value='';refreshVariants();});
 
 // ---------- import / export ----------
 $('exportBtn').addEventListener('click',()=>{const txt=JSON.stringify(data,null,2);$('jsonOut').value=txt;const b=new Blob([txt],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='layout.json';a.click();});
 $('copyBtn').addEventListener('click',async()=>{const txt=JSON.stringify(data,null,2);$('jsonOut').value=txt;try{await navigator.clipboard.writeText(txt);}catch(e){$('jsonOut').select();}});
 $('importBtn').addEventListener('click',()=>$('fileIn').click());
-$('fileIn').addEventListener('change',ev=>{const f=ev.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{data=JSON.parse(r.result);buildStateSelect();buildLegend();curState=Object.keys(data.states)[0];stateSel.value=curState;loadState();resetHistory();autosave();}catch(e){alert('JSON invalide');}};r.readAsText(f);});
+$('fileIn').addEventListener('change',ev=>{const f=ev.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{
+  let parsed;
+  try{ parsed=JSON.parse(r.result); }catch(e){ alert('Ce fichier n\'est pas du JSON valide.'); return; }
+  try{
+    data=migrate(parsed);
+    buildStateSelect();buildLegend();curState=Object.keys(data.states)[0];stateSel.value=curState;loadState();resetHistory();autosave();
+  }catch(e){
+    alert('Le JSON est valide mais son import a échoué :\n'+e.message+'\n\nMontre ce message à Claude pour qu\'il corrige migrate().');
+    console.error('Échec import', e);
+  }
+};r.readAsText(f);});
 $('resetBtn').addEventListener('click',()=>{if(!confirm('Réinitialiser au layout du code (perd les modifs non exportées) ?'))return;data=clone(SEED);buildStateSelect();buildLegend();curState=Object.keys(data.states)[0];stateSel.value=curState;loadState();resetHistory();autosave();});
 
 // ---------- données embarquées (file:// bloque fetch) ----------
@@ -391,20 +490,19 @@ function SEED_DATA(){return {"states":{
    {"id":"cleanBypassBtn","label":"BYP","group":"btn","x":32,"y":97,"w":26,"h":14},{"id":"roomBypassBtn","label":"BYP","group":"btn","x":176,"y":97,"w":26,"h":14},{"id":"reverbBypassBtn","label":"BYP","group":"btn","x":320,"y":97,"w":26,"h":14},{"id":"deEssBypassBtn","label":"BYP","group":"btn","x":464,"y":97,"w":26,"h":14},{"id":"airBypassBtn","label":"BYP","group":"btn","x":608,"y":97,"w":26,"h":14},
    {"id":"deltaBtn","label":"Δ","group":"btn","x":136,"y":97,"w":16,"h":14},{"id":"roomDeltaBtn","label":"Δ","group":"btn","x":280,"y":97,"w":16,"h":14},{"id":"reverbDeltaBtn","label":"Δ","group":"btn","x":424,"y":97,"w":16,"h":14},{"id":"deEssDeltaBtn","label":"Δ","group":"btn","x":568,"y":97,"w":16,"h":14},{"id":"airDeltaBtn","label":"Δ","group":"btn","x":712,"y":97,"w":16,"h":14},
    {"id":"masterGainLabel","label":"OUTPUT","group":"text","x":580,"y":42,"w":80,"h":16},{"id":"masterGainSlider","label":"gain","group":"facade","x":666,"y":36,"w":28,"h":28},{"id":"globalBypassBtn","label":"INVISIBLE●FIX","group":"btn","x":22,"y":40,"w":160,"h":28},
-   {"id":"browsePresetBtn","label":"≡","group":"preset","x":4,"y":4,"w":24,"h":20},{"id":"prevPresetBtn","label":"◀","group":"preset","x":202,"y":2,"w":24,"h":24},{"id":"presetNameLabel","label":"preset name","group":"preset","x":228,"y":0,"w":302,"h":28},{"id":"nextPresetBtn","label":"▶","group":"preset","x":532,"y":2,"w":24,"h":24},{"id":"savePresetBtn","label":"SAVE","group":"preset","x":558,"y":5,"w":42,"h":18},{"id":"initPresetBtn","label":"INIT","group":"preset","x":602,"y":5,"w":40,"h":18},{"id":"liveHQBtn","label":"LIVE/HQ","group":"preset","x":644,"y":4,"w":68,"h":20},
-   {"id":"abBtnA","label":"A","group":"btn","x":548,"y":320,"w":24,"h":14},{"id":"abArrowBtn","label":"→","group":"btn","x":574,"y":320,"w":36,"h":14},{"id":"abBtnB","label":"B","group":"btn","x":612,"y":320,"w":24,"h":14},{"id":"undoBtn","label":"↶","group":"btn","x":638,"y":320,"w":28,"h":14},{"id":"redoBtn","label":"↷","group":"btn","x":668,"y":320,"w":28,"h":14},{"id":"scaleBtn","label":"%","group":"btn","x":698,"y":320,"w":58,"h":14}]},
+   {"id":"browsePresetBtn","label":"≡","group":"preset","x":4,"y":4,"w":24,"h":20},{"id":"prevPresetBtn","label":"◀","group":"preset","x":202,"y":2,"w":24,"h":24},{"id":"presetNameLabel","label":"preset name","group":"preset","x":228,"y":0,"w":302,"h":28},{"id":"nextPresetBtn","label":"▶","group":"preset","x":532,"y":2,"w":24,"h":24},{"id":"savePresetBtn","label":"SAVE","group":"preset","x":558,"y":5,"w":42,"h":18},{"id":"initPresetBtn","label":"INIT","group":"preset","x":602,"y":5,"w":40,"h":18},{"id":"liveHQBtn","label":"LIVE/HQ","group":"preset","x":644,"y":4,"w":68,"h":20}]},
  "cleanAdv":{"label":"Avancé — CLEAN","height":504,"zones":[{"id":"nrPanel","kind":"panel","label":"NOISE REDUCTION","x":24,"y":281,"w":296,"h":155},{"id":"gatePanel","kind":"panel","label":"GATE","x":334,"y":281,"w":402,"h":155}],"controls":[
    {"id":"nrBandDisplay","label":"NR band display","group":"nr","x":34,"y":321,"w":266,"h":116},{"id":"nrBypassBtn","label":"NR BYP","group":"nr","x":34,"y":314,"w":60,"h":13},{"id":"nrRatioSlider","label":"NR Ratio","group":"nr","x":34,"y":445,"w":260,"h":14},{"id":"nrSmoothSlider","label":"NR Smooth","group":"nr","x":34,"y":463,"w":260,"h":14},{"id":"nrArtifactBlendSlider","label":"Artifact Blend","group":"nr","x":304,"y":346,"w":34,"h":50},{"id":"nrLearnBtn","label":"LEARN (à réafficher)","group":"hidden","x":248,"y":314,"w":54,"h":13},
-   {"id":"gateBypassBtn","label":"GATE BYP","group":"gate","x":342,"y":314,"w":66,"h":13},{"id":"gateWaveform","label":"Gate waveform","group":"gate","x":342,"y":326,"w":186,"h":130},{"id":"gateAHR","label":"Gate AHR","group":"gate","x":534,"y":326,"w":192,"h":60},{"id":"plosiveProtectSlider","label":"PLOSIVE ⚠","group":"hidden","x":668,"y":462,"w":44,"h":36},{"id":"gateAutoBtn","label":"AUTO (à réafficher)","group":"hidden","x":412,"y":314,"w":54,"h":13}]},
+   {"id":"gateBypassBtn","label":"GATE BYP","group":"gate","x":342,"y":314,"w":66,"h":13},{"id":"gateWaveform","label":"Gate waveform","group":"gate","x":342,"y":326,"w":186,"h":130},{"id":"gateAHR","label":"Gate AHR","group":"gate","x":534,"y":326,"w":192,"h":60},{"id":"plosiveProtectSlider","label":"PLOSIVE ⚠","group":"hidden","x":668,"y":462,"w":44,"h":36},{"id":"gateAutoBtn","label":"AUTO (à réafficher)","group":"hidden","x":412,"y":314,"w":54,"h":13},{"id":"nrRatioLabel","label":"ratio","group":"text","x":296,"y":445,"w":38,"h":14},{"id":"nrSmoothLabel","label":"smooth","group":"text","x":296,"y":463,"w":38,"h":14},{"id":"nrArtifactBlendLabel","label":"blend","group":"text","x":300,"y":398,"w":42,"h":11},{"id":"plosiveLabel","label":"PLOSIVE","group":"text","x":656,"y":500,"w":68,"h":11}]},
  "roomAdv":{"label":"Avancé — ROOM","height":478,"zones":[{"id":"roomAnalysis","kind":"panel","label":"NOTCH ANALYSIS","x":24,"y":281,"w":330,"h":152},{"id":"roomParams","kind":"panel","label":"NOTCH PARAMETERS","x":364,"y":281,"w":372,"h":152}],"controls":[
-   {"id":"roomVisualizer","label":"Room heatmap","group":"room","x":58,"y":337,"w":296,"h":112},{"id":"advRoomFreqSlider","label":"FREQ","group":"room","x":380,"y":347,"w":50,"h":66},{"id":"advRoomQSlider","label":"Q","group":"room","x":476,"y":347,"w":50,"h":66},{"id":"advRoomDepthBoostSlider","label":"Depth Boost","group":"room","x":572,"y":347,"w":50,"h":66}]},
+   {"id":"roomVisualizer","label":"Room heatmap","group":"room","x":58,"y":337,"w":296,"h":112},{"id":"advRoomFreqSlider","label":"FREQ","group":"room","x":380,"y":347,"w":50,"h":66},{"id":"advRoomQSlider","label":"Q","group":"room","x":476,"y":347,"w":50,"h":66},{"id":"advRoomDepthBoostSlider","label":"Depth Boost","group":"room","x":572,"y":347,"w":50,"h":66},{"id":"advRoomFreqLabel","label":"FREQ","group":"text","x":378,"y":415,"w":54,"h":10},{"id":"advRoomQLabel","label":"Q","group":"text","x":474,"y":415,"w":54,"h":10},{"id":"advRoomDepthBoostLabel","label":"DEPTH","group":"text","x":570,"y":415,"w":54,"h":10}]},
  "deEssAdv":{"label":"Avancé — DE-ESS","height":478,"zones":[{"id":"deEssPanel","kind":"panel","label":"DE-ESSER ADVANCED","x":24,"y":281,"w":712,"h":130}],"controls":[
-   {"id":"deEssDetect","label":"De-Ess detect canvas","group":"deess","x":34,"y":317,"w":360,"h":84},{"id":"advDeEssDetectSlider","label":"Q / Detect","group":"deess","x":34,"y":404,"w":318,"h":16},{"id":"deEssAR","label":"De-Ess AHR","group":"deess","x":402,"y":317,"w":218,"h":60},{"id":"advDeEssIntenSlider","label":"Intensity","group":"deess","x":630,"y":321,"w":30,"h":88}]},
+   {"id":"deEssDetect","label":"De-Ess detect canvas","group":"deess","x":34,"y":317,"w":360,"h":84},{"id":"advDeEssDetectSlider","label":"Q / Detect","group":"deess","x":34,"y":404,"w":318,"h":16},{"id":"deEssAR","label":"De-Ess AHR","group":"deess","x":402,"y":317,"w":218,"h":60},{"id":"advDeEssIntenSlider","label":"Intensity","group":"deess","x":630,"y":321,"w":30,"h":88},{"id":"advDeEssDetectLabel","label":"Q","group":"text","x":354,"y":404,"w":18,"h":16},{"id":"advDeEssIntenLabel","label":"INTEN","group":"text","x":618,"y":411,"w":54,"h":10}]},
  "deRevAdv":{"label":"Avancé — DE-REV","height":478,"zones":[{"id":"deRevPanel","kind":"panel","label":"DE-REV ADVANCED","x":24,"y":281,"w":712,"h":152}],"controls":[
-   {"id":"deRevCanvas","label":"De-Rev 3-band canvas","group":"derev","x":36,"y":305,"w":606,"h":120},{"id":"deRevFloorSlider","label":"FLOOR","group":"derev","x":656,"y":299,"w":50,"h":66},{"id":"deRevLinkBtn","label":"LINK","group":"derev","x":656,"y":387,"w":52,"h":18}]},
+   {"id":"deRevCanvas","label":"De-Rev 3-band canvas","group":"derev","x":36,"y":305,"w":606,"h":120},{"id":"deRevFloorSlider","label":"FLOOR","group":"derev","x":656,"y":299,"w":50,"h":66},{"id":"deRevLinkBtn","label":"LINK","group":"derev","x":656,"y":387,"w":52,"h":18},{"id":"deRevFloorLabel","label":"FLOOR","group":"text","x":654,"y":367,"w":54,"h":10}]},
  "airAdv":{"label":"Avancé — AIR","height":478,"zones":[{"id":"airPanel","kind":"panel","label":"AIR CHARACTER","x":24,"y":281,"w":712,"h":152}],"controls":[
-   {"id":"advAirFreqSlider","label":"AIR freq","group":"air","x":38,"y":406,"w":414,"h":20},{"id":"advAirDriveSlider","label":"HEAT","group":"air","x":464,"y":294,"w":50,"h":66},{"id":"airSatTriodeBtn","label":"TRIODE","group":"air","x":520,"y":292,"w":98,"h":19},{"id":"airSatClassABtn","label":"CLASS-A","group":"air","x":622,"y":292,"w":98,"h":19},{"id":"airSatTapeBtn","label":"TAPE","group":"air","x":520,"y":315,"w":98,"h":19},{"id":"airSatIronBtn","label":"IRON","group":"air","x":622,"y":315,"w":98,"h":19},{"id":"advAirShapeLabel","label":"TRANSIENT SHAPE","group":"text","x":464,"y":372,"w":264,"h":11},{"id":"advAirShapeSlider","label":"shape","group":"air","x":468,"y":385,"w":256,"h":20}]}
-}};}
+   {"id":"advAirFreqSlider","label":"AIR freq","group":"air","x":38,"y":406,"w":414,"h":20},{"id":"advAirDriveSlider","label":"HEAT","group":"air","x":464,"y":294,"w":50,"h":66},{"id":"airSatTriodeBtn","label":"TRIODE","group":"air","x":520,"y":292,"w":98,"h":19},{"id":"airSatClassABtn","label":"CLASS-A","group":"air","x":622,"y":292,"w":98,"h":19},{"id":"airSatTapeBtn","label":"TAPE","group":"air","x":520,"y":315,"w":98,"h":19},{"id":"airSatIronBtn","label":"IRON","group":"air","x":622,"y":315,"w":98,"h":19},{"id":"advAirShapeLabel","label":"TRANSIENT SHAPE","group":"text","x":464,"y":372,"w":264,"h":11},{"id":"advAirShapeSlider","label":"shape","group":"air","x":468,"y":385,"w":256,"h":20},{"id":"advAirDriveLabel","label":"HEAT","group":"text","x":460,"y":362,"w":58,"h":10}]}
+},"global":{"controls":[{"id":"tooltipBar","label":"Barre infobulle","group":"paint","anchor":"bottombar","bottom":48,"h":20},{"id":"abBtnA","label":"A","group":"btn","anchor":"br","right":212,"bottom":18,"w":24,"h":14},{"id":"abArrowBtn","label":"→","group":"btn","anchor":"br","right":186,"bottom":18,"w":36,"h":14},{"id":"abBtnB","label":"B","group":"btn","anchor":"br","right":148,"bottom":18,"w":24,"h":14},{"id":"undoBtn","label":"↶","group":"btn","anchor":"br","right":122,"bottom":18,"w":28,"h":14},{"id":"redoBtn","label":"↷","group":"btn","anchor":"br","right":92,"bottom":18,"w":28,"h":14},{"id":"scaleBtn","label":"%","group":"btn","anchor":"br","right":62,"bottom":18,"w":58,"h":14}]}};}
 boot();
 </script>
 </body>

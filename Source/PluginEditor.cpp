@@ -3967,12 +3967,13 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
         }
     }
 
-    // ── Tooltip bar (20px, bas du plugin) — memes couleurs que barre preset ───
+    // ── Tooltip bar (bas du plugin) — memes couleurs que barre preset — ancrage : UI::anchor::bottomBar ───
     {
-        float tbY = BH - 48.0f; // bas de l'espace contenu (hors preset bar 28px)
+        const UI::AnchorBottomBar& tb = UI::anchor::bottomBar::tooltipBar;
+        float tbY = BH - tb.bottom; // bas de l'espace contenu (hors preset bar 28px)
         // Fond identique a la barre preset
         g.setColour(Theme::surfaceBar);
-        g.fillRect(0.0f, tbY, BW, 20.0f);
+        g.fillRect(0.0f, tbY, BW, tb.h);
         // Separateur haut
         g.setColour(Theme::textMuted.withAlpha(0.28f));
         g.fillRect(0.0f, tbY, BW, 1.0f);
@@ -3981,13 +3982,13 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
         if (currentTooltipText.isNotEmpty()) {
             // Nom du parametre en cyan
             g.setColour(Theme::accentDark);
-            g.drawText(currentTooltipParam + "  ", 10, (int)tbY, 140, 20, juce::Justification::centredLeft);
+            g.drawText(currentTooltipParam + "  ", 10, (int)tbY, 140, (int)tb.h, juce::Justification::centredLeft);
             // Description en gris
             g.setColour(Theme::textSecondary);
-            g.drawText(currentTooltipText, 148, (int)tbY, (int)BW - 200, 20, juce::Justification::centredLeft);
+            g.drawText(currentTooltipText, 148, (int)tbY, (int)BW - 200, (int)tb.h, juce::Justification::centredLeft);
         } else {
             g.setColour(Theme::textMuted.withAlpha(0.50f));
-            g.drawText("Survoler un parametre pour voir sa description", 10, (int)tbY, (int)BW - 20, 20, juce::Justification::centredLeft);
+            g.drawText("Survoler un parametre pour voir sa description", 10, (int)tbY, (int)BW - 20, (int)tb.h, juce::Justification::centredLeft);
         }
     }
 
@@ -4016,69 +4017,76 @@ void InvisibleFixAudioProcessorEditor::resized()
 
     // Helpers : coordonnées base × S
     auto sc = [S](int v) { return (int)(v * S); };
+    // Applique un UI::Rect (coordonnées de base, source de vérité tools/layout.json) avec le scale courant
+    auto B = [S](const UI::Rect& r) { return juce::Rectangle<int>((int)(r.x * S), (int)(r.y * S), (int)(r.w * S), (int)(r.h * S)); };
+    // Applique un UI::AnchorBR (ancré bas-droite, offsets en coordonnées de base) avec le scale courant
+    auto BR = [this, S](const UI::AnchorBR& r) {
+        return juce::Rectangle<int>(getWidth() - (int)(r.right * S), getHeight() - (int)(r.bottom * S), (int)(r.w * S), (int)(r.h * S));
+    };
 
-    // ── Façade : knob 94px + textbox 20px = 114px, centré dans 136px → x+21 ──
-    const int modX[5] = { 24, 168, 312, 456, 600 };
-    int sKnobY  = sc(123);
-    int sLabelY = sc(242);
+    // ── Façade : positions pilotées par les données (Source/Generated/UILayout.h ← tools/layout.json) ──
+    namespace UF = UI::ctrl::facade;
 
     ModernSlider* facadeSliders[5] = {
         &cleanSlider, &roomSlider, &reverbSlider, &deEssSlider, &airSlider
     };
+    const UI::Rect* facadeSliderRects[5] = { &UF::cleanSlider, &UF::roomSlider, &UF::reverbSlider, &UF::deEssSlider, &UF::airSlider };
+    const UI::Rect* facadeLabelRects[5]  = { &UF::cleanLabel,  &UF::roomLabel,  &UF::reverbLabel,  &UF::deEssLabel,  &UF::airLabel };
     for (int i = 0; i < 5; ++i)
     {
-        facadeSliders[i]->slider.setBounds(sc(modX[i] + 21), sKnobY, sc(94), sc(114));
-        facadeSliders[i]->label.setBounds(sc(modX[i]), sLabelY, sc(136), sc(14));
+        facadeSliders[i]->slider.setBounds(B(*facadeSliderRects[i]));
+        facadeSliders[i]->label.setBounds(B(*facadeLabelRects[i]));
     }
 
     // ── BYP et △ dans chaque module ──────────────────────────────────────────
-    int bY = sc(97), bW = sc(26), bH = sc(14);
     CustomButton* bypBtns[5] = {
         &cleanBypassBtn, &roomBypassBtn, &reverbBypassBtn, &deEssBypassBtn, &airBypassBtn
     };
     CustomButton* deltaBtns[5] = {
         &deltaBtn, &roomDeltaBtn, &reverbDeltaBtn, &deEssDeltaBtn, &airDeltaBtn
     };
+    const UI::Rect* bypRects[5]   = { &UF::cleanBypassBtn, &UF::roomBypassBtn, &UF::reverbBypassBtn, &UF::deEssBypassBtn, &UF::airBypassBtn };
+    const UI::Rect* deltaRects[5] = { &UF::deltaBtn, &UF::roomDeltaBtn, &UF::reverbDeltaBtn, &UF::deEssDeltaBtn, &UF::airDeltaBtn };
     for (int i = 0; i < 5; ++i)
     {
-        bypBtns[i]->button.setBounds(sc(modX[i] + 8),            bY, bW, bH);
-        deltaBtns[i]->button.setBounds(sc(modX[i] + 136 - 24), bY, sc(16), bH);
+        bypBtns[i]->button.setBounds(B(*bypRects[i]));
+        deltaBtns[i]->button.setBounds(B(*deltaRects[i]));
     }
 
     // ── Master gain ───────────────────────────────────────────────────────────
     // Master Gain : label + boite draggable verticale compacte
-    masterGainLabel .setBounds(sc(580), sc(42), sc(80),  sc(16));
-    masterGainSlider.setBounds(sc(666), sc(36), sc(28),  sc(28));
-    // Bypass global : couvre le wordmark INVISIBLE●FIX (x=22, y=40, 160×28 en virtuel)
-    globalBypassBtn .setBounds(sc(22), sc(40), sc(160), sc(28));
+    masterGainLabel .setBounds(B(UF::masterGainLabel));
+    masterGainSlider.setBounds(B(UF::masterGainSlider));
+    // Bypass global : couvre le wordmark INVISIBLE●FIX
+    globalBypassBtn .setBounds(B(UF::globalBypassBtn));
 
     // ── Sliders gain entrée/sortie invisibles (sur les barres meter) ─────────
     inputGainSlider .setBounds(-1, -1, 1, 1);
     outputGainSlider.setBounds(-1, -1, 1, 1);
 
     // ── Barre preset Arturia — 28px, layout centré ────────────────────────────
-    // Indicateur scale — coin bas-droit, toujours visible (position dynamique)
+    // Indicateur scale — coin bas-droit, toujours visible (position dynamique, ancrage : UI::anchor::br)
     scaleBtn.setButtonText(juce::String(juce::roundToInt(currentScale * 100)) + " %");
-    scaleBtn.setBounds(getWidth() - sc(62), getHeight() - sc(18), sc(58), sc(14));
+    scaleBtn.setBounds(BR(UI::anchor::br::scaleBtn));
 
     // A/B Snapshot — à gauche du undo/redo
-    abBtnA   .setBounds(getWidth() - sc(212), getHeight() - sc(18), sc(24), sc(14));
-    abArrowBtn.setBounds(getWidth() - sc(186), getHeight() - sc(18), sc(36), sc(14));
-    abBtnB   .setBounds(getWidth() - sc(148), getHeight() - sc(18), sc(24), sc(14));
+    abBtnA   .setBounds(BR(UI::anchor::br::abBtnA));
+    abArrowBtn.setBounds(BR(UI::anchor::br::abArrowBtn));
+    abBtnB   .setBounds(BR(UI::anchor::br::abBtnB));
 
     // Undo / Redo — coin bas-droit, à gauche du bouton scale
-    undoBtn.setBounds(getWidth() - sc(122), getHeight() - sc(18), sc(28), sc(14));
-    redoBtn.setBounds(getWidth() - sc(92),  getHeight() - sc(18), sc(28), sc(14));
+    undoBtn.setBounds(BR(UI::anchor::br::undoBtn));
+    redoBtn.setBounds(BR(UI::anchor::br::redoBtn));
 
     presetTypeLabel .setVisible(false);
-    liveHQBtn.setBounds(sc(644), sc(4), sc(68), sc(20));
-    prevPresetBtn   .setBounds(sc(202), sc(2),  sc(24), sc(24));
-    presetNameLabel .setBounds(sc(228), sc(0),  sc(302),sc(28));
-    nextPresetBtn   .setBounds(sc(532), sc(2),  sc(24), sc(24));
-    savePresetBtn   .setBounds(sc(558), sc(5),  sc(42), sc(18));
-    initPresetBtn   .setBounds(sc(602), sc(5),  sc(40), sc(18));
+    liveHQBtn.setBounds(B(UF::liveHQBtn));
+    prevPresetBtn   .setBounds(B(UF::prevPresetBtn));
+    presetNameLabel .setBounds(B(UF::presetNameLabel));
+    nextPresetBtn   .setBounds(B(UF::nextPresetBtn));
+    savePresetBtn   .setBounds(B(UF::savePresetBtn));
+    initPresetBtn   .setBounds(B(UF::initPresetBtn));
     // Bouton Browse (≡) à GAUCHE de la barre preset
-    browsePresetBtn .setBounds(sc(4),   sc(4),  sc(24), sc(20));
+    browsePresetBtn .setBounds(B(UF::browsePresetBtn));
 
     // Panel browser : prend toute la hauteur sous la barre preset
     if (presetBrowser != nullptr)
@@ -4150,135 +4158,139 @@ void InvisibleFixAudioProcessorEditor::resized()
         //   Knobs row: x=162, y=293, w=44, h=55 each (pitch=58)
         //   Labels:    x=160/218, y=350, w=50, h=10
         //   Horiz sliders: y=367 and y=386, x=162, w=104 + textbox 36px
+        // Positions pilotées par les données (Source/Generated/UILayout.h ← tools/layout.json)
+        namespace UC = UI::ctrl::cleanAdv;
         if (nrBandDisplay != nullptr) {
             nrBandDisplay->setVisible(true);
-            nrBandDisplay->setBounds(sc(34), sc(321), sc(266), sc(116));
+            nrBandDisplay->setBounds(B(UC::nrBandDisplay));
         }
         // nrThreshSlider and nrFloorSlider are now controlled by NRSpectrumDisplay drag
         // keep them hidden — nrRatioSlider and nrSmoothSlider remain
         nrRatioSlider.slider.setVisible(true);  nrRatioSlider.label.setVisible(true);
-        nrRatioSlider.slider.setBounds(sc(34), sc(445), sc(260), sc(14));
-        nrRatioSlider.label.setBounds(sc(296), sc(445), sc(38),  sc(14));
+        nrRatioSlider.slider.setBounds(B(UC::nrRatioSlider));
+        nrRatioSlider.label.setBounds(B(UC::nrRatioLabel));
         nrSmoothSlider.slider.setVisible(true); nrSmoothSlider.label.setVisible(true);
-        nrSmoothSlider.slider.setBounds(sc(34), sc(463), sc(260), sc(14));
-        nrSmoothSlider.label.setBounds(sc(296), sc(463), sc(38),  sc(14));
+        nrSmoothSlider.slider.setBounds(B(UC::nrSmoothSlider));
+        nrSmoothSlider.label.setBounds(B(UC::nrSmoothLabel));
         nrLearnBtn.setVisible(false);
-        nrLearnBtn.setBounds(sc(248), sc(314), sc(54), sc(13));
+        nrLearnBtn.setBounds(B(UC::nrLearnBtn));
         nrBypassBtn.setVisible(true);
-        nrBypassBtn.setBounds(sc(34), sc(314), sc(60), sc(13));
+        nrBypassBtn.setBounds(B(UC::nrBypassBtn));
         nrArtifactBlendSlider.slider.setVisible(true);
         nrArtifactBlendSlider.label .setVisible(true);
-        nrArtifactBlendSlider.slider.setBounds(sc(304), sc(346), sc(34), sc(50));
-        nrArtifactBlendSlider.label .setBounds(sc(300), sc(398), sc(42), sc(11));
+        nrArtifactBlendSlider.slider.setBounds(B(UC::nrArtifactBlendSlider));
+        nrArtifactBlendSlider.label .setBounds(B(UC::nrArtifactBlendLabel));
 
         gateAutoBtn.setVisible(false);
         gateBypassBtn.setVisible(true);
-        gateBypassBtn.setBounds(sc(342), sc(314), sc(66), sc(13));
+        gateBypassBtn.setBounds(B(UC::gateBypassBtn));
         if (gateWaveform != nullptr) {
             gateWaveform->setVisible(true);
-            gateWaveform->setBounds(sc(342), sc(326), sc(186), sc(130));
+            gateWaveform->setBounds(B(UC::gateWaveform));
         }
         if (gateDualRail != nullptr) gateDualRail->setVisible(false);
         if (gateAHR != nullptr) {
             gateAHR->setVisible(true);
-            gateAHR->setBounds(sc(534), sc(326), sc(192), sc(60));
+            gateAHR->setBounds(B(UC::gateAHR));
         }
 
         // Plosive protection knob (sous gateAHR)
         plosiveProtectSlider.slider.setVisible(true);
         plosiveProtectSlider.label .setVisible(true);
-        plosiveProtectSlider.slider.setBounds(sc(668), sc(462), sc(44), sc(36));
-        plosiveProtectSlider.label .setBounds(sc(656), sc(500), sc(68), sc(11));
+        plosiveProtectSlider.slider.setBounds(B(UC::plosiveProtectSlider));
+        plosiveProtectSlider.label .setBounds(B(UC::plosiveLabel));
     }
     else if (currentTab == AdvancedTab::Room)
     {
-        // Canvas heatmap : canvX=58, canvY=309, canvW=296, canvH=112
-        // (lpX=24 + 34px Y-axis zone = 58; lpY=281 + 28pad = 309)
+        // Positions pilotées par les données (Source/Generated/UILayout.h ← tools/layout.json)
+        namespace UR = UI::ctrl::roomAdv;
         if (roomVisualizer != nullptr) {
             addAndMakeVisible(roomVisualizer.get());
             roomVisualizer->setVisible(true);
-            roomVisualizer->setBounds(sc(58), sc(337), sc(296), sc(112));
+            roomVisualizer->setBounds(B(UR::roomVisualizer));
         }
         advRoomFreqSlider.slider.setVisible(true); advRoomFreqSlider.label.setVisible(true);
         advRoomQSlider.slider.setVisible(true);    advRoomQSlider.label.setVisible(true);
-        advRoomFreqSlider.slider.setBounds(sc(380), sc(347), sc(50), sc(66));
-        advRoomFreqSlider.label.setBounds(sc(378), sc(415), sc(54), sc(10));
-        advRoomQSlider.slider.setBounds(sc(476), sc(347), sc(50), sc(66));
-        advRoomQSlider.label.setBounds(sc(474), sc(415), sc(54), sc(10));
+        advRoomFreqSlider.slider.setBounds(B(UR::advRoomFreqSlider));
+        advRoomFreqSlider.label.setBounds(B(UR::advRoomFreqLabel));
+        advRoomQSlider.slider.setBounds(B(UR::advRoomQSlider));
+        advRoomQSlider.label.setBounds(B(UR::advRoomQLabel));
         advRoomDepthBoostSlider.slider.setVisible(true); advRoomDepthBoostSlider.label.setVisible(true);
-        advRoomDepthBoostSlider.slider.setBounds(sc(572), sc(347), sc(50), sc(66));
-        advRoomDepthBoostSlider.label.setBounds(sc(570), sc(415), sc(54), sc(10));
+        advRoomDepthBoostSlider.slider.setBounds(B(UR::advRoomDepthBoostSlider));
+        advRoomDepthBoostSlider.label.setBounds(B(UR::advRoomDepthBoostLabel));
     }
     else if (currentTab == AdvancedTab::DeEss)
     {
-        // Panel: x=24, y=281, w=712, h=130
-        // → DeEssDetect display: x=34, y=289, w=360, h=108  (plus haut, moins large)
-        // → AR envelope: x=402, y=289, w=220, h=108          (compact)
-        // → Intensity slider vertical: x=628, y=289, w=96, h=108
+        // Positions pilotées par les données (Source/Generated/UILayout.h ← tools/layout.json)
+        namespace UD = UI::ctrl::deEssAdv;
         if (deEssDetect != nullptr) {
             deEssDetect->setVisible(true);
-            deEssDetect->setBounds(sc(34), sc(317), sc(360), sc(84));
+            deEssDetect->setBounds(B(UD::deEssDetect));
         }
         {
-            advDeEssDetectSlider.slider.setBounds(sc(34), sc(404), sc(318), sc(16));
-            advDeEssDetectSlider.label.setBounds(sc(354), sc(404), sc(18), sc(16));
+            advDeEssDetectSlider.slider.setBounds(B(UD::advDeEssDetectSlider));
+            advDeEssDetectSlider.label.setBounds(B(UD::advDeEssDetectLabel));
             advDeEssDetectSlider.slider.setVisible(true);
             advDeEssDetectSlider.label.setVisible(true);
         }
         if (deEssAR != nullptr) {
             deEssAR->setVisible(true);
-            deEssAR->setBounds(sc(402), sc(317), sc(218), sc(60));
+            deEssAR->setBounds(B(UD::deEssAR));
         }
         {
             auto show = [](ModernSlider& ms) { ms.slider.setVisible(true); ms.label.setVisible(true); };
-            advDeEssIntenSlider.slider.setBounds(sc(630), sc(321), sc(30), sc(88));
-            advDeEssIntenSlider.label.setBounds(sc(618), sc(411), sc(54), sc(10));
+            advDeEssIntenSlider.slider.setBounds(B(UD::advDeEssIntenSlider));
+            advDeEssIntenSlider.label.setBounds(B(UD::advDeEssIntenLabel));
             show(advDeEssIntenSlider);
         }
     }
     else if (currentTab == AdvancedTab::DeRev)
     {
+        // Positions pilotées par les données (Source/Generated/UILayout.h ← tools/layout.json)
+        namespace UV = UI::ctrl::deRevAdv;
         // Canvas dual-axis : remplace les 4 knobs
         if (deRevCanvas != nullptr)
         {
             deRevCanvas->setVisible(true);
-            deRevCanvas->setBounds(sc(36), sc(305), sc(606), sc(120));
+            deRevCanvas->setBounds(B(UV::deRevCanvas));
         }
         // Knob Floor à droite du canvas
         deRevFloorSlider.slider.setVisible(true);
         deRevFloorSlider.label .setVisible(true);
-        deRevFloorSlider.slider.setBounds(sc(656), sc(299), sc(50), sc(66));
-        deRevFloorSlider.label .setBounds(sc(654), sc(367), sc(54), sc(10));
+        deRevFloorSlider.slider.setBounds(B(UV::deRevFloorSlider));
+        deRevFloorSlider.label .setBounds(B(UV::deRevFloorLabel));
         // Bouton LINK sous le knob Floor
         deRevLinkBtn.setVisible(true);
-        deRevLinkBtn.setBounds(sc(656), sc(387), sc(52), sc(18));
+        deRevLinkBtn.setBounds(B(UV::deRevLinkBtn));
     }
     else if (currentTab == AdvancedTab::Air)
     {
+        // Positions pilotées par les données (Source/Generated/UILayout.h ← tools/layout.json)
+        namespace UA = UI::ctrl::airAdv;
         advAirFreqSlider.setVisible(true);
         advAirDriveSlider.slider.setVisible(true);
         advAirDriveSlider.label.setVisible(true);
         airCharacterLabel.setVisible(false);
-        advAirFreqSlider.setBounds(sc(38), sc(406), sc(414), sc(20));
+        advAirFreqSlider.setBounds(B(UA::advAirFreqSlider));
         // HEAT knob — à gauche de la zone droite
-        advAirDriveSlider.slider.setBounds(sc(464), sc(294), sc(50), sc(66));
-        advAirDriveSlider.label.setBounds(sc(460), sc(362), sc(58), sc(10));
+        advAirDriveSlider.slider.setBounds(B(UA::advAirDriveSlider));
+        advAirDriveSlider.label.setBounds(B(UA::advAirDriveLabel));
 
         // SAT TYPE buttons — 2x2 à droite du knob Heat
         airSatTriodeBtn.setVisible(true);
         airSatClassABtn.setVisible(true);
         airSatTapeBtn  .setVisible(true);
         airSatIronBtn  .setVisible(true);
-        airSatTriodeBtn.setBounds(sc(520), sc(292), sc(98), sc(19));
-        airSatClassABtn.setBounds(sc(622), sc(292), sc(98), sc(19));
-        airSatTapeBtn  .setBounds(sc(520), sc(315), sc(98), sc(19));
-        airSatIronBtn  .setBounds(sc(622), sc(315), sc(98), sc(19));
+        airSatTriodeBtn.setBounds(B(UA::airSatTriodeBtn));
+        airSatClassABtn.setBounds(B(UA::airSatClassABtn));
+        airSatTapeBtn  .setBounds(B(UA::airSatTapeBtn));
+        airSatIronBtn  .setBounds(B(UA::airSatIronBtn));
 
         // TRANSIENT SHAPE — slider bipolaire dans un cadre bleuté sous l'ensemble
         advAirShapeLabel .setVisible(true);
         advAirShapeSlider.setVisible(true);
-        advAirShapeLabel .setBounds(sc(464), sc(372), sc(264), sc(11));
-        advAirShapeSlider.setBounds(sc(468), sc(385), sc(256), sc(20));
+        advAirShapeLabel .setBounds(B(UA::advAirShapeLabel));
+        advAirShapeSlider.setBounds(B(UA::advAirShapeSlider));
     }
 }
 

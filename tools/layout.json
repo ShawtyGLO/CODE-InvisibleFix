@@ -45,13 +45,7 @@
         { "id": "nextPresetBtn",   "label": "▶",       "group": "preset", "x": 532, "y": 2, "w": 24,  "h": 24 },
         { "id": "savePresetBtn",   "label": "SAVE",    "group": "preset", "x": 558, "y": 5, "w": 42,  "h": 18 },
         { "id": "initPresetBtn",   "label": "INIT",    "group": "preset", "x": 602, "y": 5, "w": 40,  "h": 18 },
-        { "id": "liveHQBtn",       "label": "LIVE/HQ", "group": "preset", "x": 644, "y": 4, "w": 68,  "h": 20 },
-        { "id": "abBtnA",     "label": "A",  "group": "btn", "anchor": "br", "x": 548, "y": 320, "w": 24, "h": 14 },
-        { "id": "abArrowBtn", "label": "→",  "group": "btn", "anchor": "br", "x": 574, "y": 320, "w": 36, "h": 14 },
-        { "id": "abBtnB",     "label": "B",  "group": "btn", "anchor": "br", "x": 612, "y": 320, "w": 24, "h": 14 },
-        { "id": "undoBtn",    "label": "↶",  "group": "btn", "anchor": "br", "x": 638, "y": 320, "w": 28, "h": 14 },
-        { "id": "redoBtn",    "label": "↷",  "group": "btn", "anchor": "br", "x": 668, "y": 320, "w": 28, "h": 14 },
-        { "id": "scaleBtn",   "label": "%",  "group": "btn", "anchor": "br", "x": 698, "y": 320, "w": 58, "h": 14 }
+        { "id": "liveHQBtn",       "label": "LIVE/HQ", "group": "preset", "x": 644, "y": 4, "w": 68,  "h": 20 }
       ]
     },
     "cleanAdv": {
@@ -72,7 +66,11 @@
         { "id": "gateWaveform",        "label": "Gate waveform",   "group": "gate",   "x": 342, "y": 326, "w": 186, "h": 130 },
         { "id": "gateAHR",             "label": "Gate AHR",        "group": "gate",   "x": 534, "y": 326, "w": 192, "h": 60 },
         { "id": "plosiveProtectSlider","label": "PLOSIVE ⚠ (à recadrer)", "group": "hidden", "x": 668, "y": 462, "w": 44,  "h": 36 },
-        { "id": "gateAutoBtn",         "label": "AUTO (à réafficher)",  "group": "hidden", "x": 412, "y": 314, "w": 54,  "h": 13 }
+        { "id": "gateAutoBtn",         "label": "AUTO (à réafficher)",  "group": "hidden", "x": 412, "y": 314, "w": 54,  "h": 13 },
+        { "id": "nrRatioLabel",         "label": "ratio",   "group": "text", "x": 296, "y": 445, "w": 38, "h": 14 },
+        { "id": "nrSmoothLabel",        "label": "smooth",  "group": "text", "x": 296, "y": 463, "w": 38, "h": 14 },
+        { "id": "nrArtifactBlendLabel", "label": "blend",   "group": "text", "x": 300, "y": 398, "w": 42, "h": 11 },
+        { "id": "plosiveLabel",         "label": "PLOSIVE", "group": "text", "x": 656, "y": 500, "w": 68, "h": 11 }
       ]
     },
     "roomAdv": {
@@ -86,7 +84,10 @@
         { "id": "roomVisualizer",         "label": "Room heatmap", "group": "room", "x": 58,  "y": 337, "w": 296, "h": 112 },
         { "id": "advRoomFreqSlider",      "label": "FREQ",         "group": "room", "x": 380, "y": 347, "w": 50,  "h": 66 },
         { "id": "advRoomQSlider",         "label": "Q",           "group": "room", "x": 476, "y": 347, "w": 50,  "h": 66 },
-        { "id": "advRoomDepthBoostSlider","label": "Depth Boost", "group": "room", "x": 572, "y": 347, "w": 50,  "h": 66 }
+        { "id": "advRoomDepthBoostSlider","label": "Depth Boost", "group": "room", "x": 572, "y": 347, "w": 50,  "h": 66 },
+        { "id": "advRoomFreqLabel",       "label": "FREQ",        "group": "text", "x": 378, "y": 415, "w": 54, "h": 10 },
+        { "id": "advRoomQLabel",          "label": "Q",           "group": "text", "x": 474, "y": 415, "w": 54, "h": 10 },
+        { "id": "advRoomDepthBoostLabel", "label": "DEPTH",       "group": "text", "x": 570, "y": 415, "w": 54, "h": 10 }
       ]
     },
     "deEssAdv": {
@@ -99,7 +100,9 @@
         { "id": "deEssDetect",         "label": "De-Ess detect canvas", "group": "deess", "x": 34,  "y": 317, "w": 360, "h": 84 },
         { "id": "advDeEssDetectSlider","label": "Q / Detect",           "group": "deess", "x": 34,  "y": 404, "w": 318, "h": 16 },
         { "id": "deEssAR",             "label": "De-Ess AHR (A/R)",     "group": "deess", "x": 402, "y": 317, "w": 218, "h": 60 },
-        { "id": "advDeEssIntenSlider", "label": "Intensity",            "group": "deess", "x": 630, "y": 321, "w": 30,  "h": 88 }
+        { "id": "advDeEssIntenSlider", "label": "Intensity",            "group": "deess", "x": 630, "y": 321, "w": 30,  "h": 88 },
+        { "id": "advDeEssDetectLabel", "label": "Q",                    "group": "text",  "x": 354, "y": 404, "w": 18,  "h": 16 },
+        { "id": "advDeEssIntenLabel",  "label": "INTEN",                "group": "text",  "x": 618, "y": 411, "w": 54,  "h": 10 }
       ]
     },
     "deRevAdv": {
@@ -111,7 +114,8 @@
       "controls": [
         { "id": "deRevCanvas",     "label": "De-Rev 3-band canvas", "group": "derev", "x": 36,  "y": 305, "w": 606, "h": 120 },
         { "id": "deRevFloorSlider","label": "FLOOR",                "group": "derev", "x": 656, "y": 299, "w": 50,  "h": 66 },
-        { "id": "deRevLinkBtn",    "label": "LINK",                 "group": "derev", "x": 656, "y": 387, "w": 52,  "h": 18 }
+        { "id": "deRevLinkBtn",    "label": "LINK",                 "group": "derev", "x": 656, "y": 387, "w": 52,  "h": 18 },
+        { "id": "deRevFloorLabel", "label": "FLOOR",                "group": "text",  "x": 654, "y": 367, "w": 54,  "h": 10 }
       ]
     },
     "airAdv": {
@@ -128,8 +132,21 @@
         { "id": "airSatTapeBtn",    "label": "TAPE",         "group": "air", "x": 520, "y": 315, "w": 98,  "h": 19 },
         { "id": "airSatIronBtn",    "label": "IRON",         "group": "air", "x": 622, "y": 315, "w": 98,  "h": 19 },
         { "id": "advAirShapeLabel", "label": "TRANSIENT SHAPE", "group": "text", "x": 464, "y": 372, "w": 264, "h": 11 },
-        { "id": "advAirShapeSlider","label": "shape slider",    "group": "air",  "x": 468, "y": 385, "w": 256, "h": 20 }
+        { "id": "advAirShapeSlider","label": "shape slider",    "group": "air",  "x": 468, "y": 385, "w": 256, "h": 20 },
+        { "id": "advAirDriveLabel", "label": "HEAT",         "group": "text", "x": 460, "y": 362, "w": 58,  "h": 10 }
       ]
     }
+  },
+  "global": {
+    "note": "Éléments toujours visibles, ancrés à un bord — présents sur toutes les fenêtres. anchor 'br' = offsets 'right'/'bottom' depuis les bords ; anchor 'bottombar' = barre pleine largeur à 'bottom' du bas.",
+    "controls": [
+      { "id": "tooltipBar", "label": "Barre infobulle", "group": "paint", "anchor": "bottombar", "bottom": 48, "h": 20 },
+      { "id": "abBtnA",     "label": "A",  "group": "btn", "anchor": "br", "right": 212, "bottom": 18, "w": 24, "h": 14 },
+      { "id": "abArrowBtn", "label": "→",  "group": "btn", "anchor": "br", "right": 186, "bottom": 18, "w": 36, "h": 14 },
+      { "id": "abBtnB",     "label": "B",  "group": "btn", "anchor": "br", "right": 148, "bottom": 18, "w": 24, "h": 14 },
+      { "id": "undoBtn",    "label": "↶",  "group": "btn", "anchor": "br", "right": 122, "bottom": 18, "w": 28, "h": 14 },
+      { "id": "redoBtn",    "label": "↷",  "group": "btn", "anchor": "br", "right": 92,  "bottom": 18, "w": 28, "h": 14 },
+      { "id": "scaleBtn",   "label": "%",  "group": "btn", "anchor": "br", "right": 62,  "bottom": 18, "w": 58, "h": 14 }
+    ]
   }
 }
