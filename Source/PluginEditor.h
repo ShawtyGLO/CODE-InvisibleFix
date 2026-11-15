@@ -28,6 +28,14 @@ public:
     {
         juce::Slider slider;
         juce::Label label;
+
+        // Tailles de reference a 100%, capturees une fois en fin de construction puis
+        // re-appliquees a chaque changement d'echelle (voir applyUiScale). Sans cela la
+        // police du libelle et la boite de valeur resteraient figees en pixels.
+        float baseLabelPt = 8.0f;
+        int   baseTbW = 50, baseTbH = 16;
+        juce::Slider::TextEntryBoxPosition baseTbPos = juce::Slider::TextBoxBelow;
+        bool  baseCaptured = false;
     };
 
     // Structure uniforme pour les boutons
@@ -135,6 +143,12 @@ private:
 
     // Fonctions utilitaires de design
     void setupModernSlider(ModernSlider& modernSlider, const juce::String& name);
+
+    // Mise a l'echelle des elements peints par les composants JUCE eux-memes
+    // (jauges de knobs, pastille centrale, BYP, delta, valeurs sous les knobs).
+    std::vector<ModernSlider*> scaledSliders;   // rempli par setupModernSlider
+    void captureSliderBaseSizes();              // fige les tailles de reference a 100%
+    void applyUiScale(float s);                 // re-applique tout a l'echelle demandee
     void applyModernKnobStyle(juce::Slider& slider);
     void updateBypassAlphas();
     void timerCallback() override;

@@ -1,0 +1,917 @@
+{
+  "meta": {
+    "baseWidth": 760,
+    "note": "Source de vérité du layout d'InvisibleFix, en coordonnées de base (avant scale sc()). Édité via Shawty's Plugin Factory (outil central). Sert à régénérer Source/Generated/UILayout.h.",
+    "generatedFrom": "PluginEditor.cpp::resized() — extraction 2026-07-09",
+    "project": "InvisibleFix",
+    "groups": {
+      "facade": "#8e7bd6",
+      "text": "#cddd7a",
+      "btn": "#9fb0ab",
+      "preset": "#6fb0c0",
+      "nr": "#1bb89e",
+      "gate": "#13add6",
+      "hidden": "#f2a33c",
+      "room": "#4bb58a",
+      "deess": "#c56fa0",
+      "derev": "#e0864a",
+      "air": "#7fb0e0",
+      "paint": "#b98cd6"
+    },
+    "typemap": {
+      "masterGainSlider": "knob",
+      "plosiveProtectSlider": "knob",
+      "nrArtifactBlendSlider": "vslider",
+      "advDeEssIntenSlider": "vslider",
+      "nrRatioSlider": "hslider",
+      "nrSmoothSlider": "hslider",
+      "advDeEssDetectSlider": "hslider",
+      "advAirShapeSlider": "hslider",
+      "advAirFreqSlider": "hslider",
+      "nrBandDisplay": "display",
+      "gateWaveform": "display",
+      "gateAHR": "display",
+      "deEssDetect": "display",
+      "deEssAR": "display",
+      "roomVisualizer": "display",
+      "deRevCanvas": "display",
+      "globalBypassBtn": "button",
+      "presetNameLabel": "label"
+    }
+  },
+  "states": {
+    "facade": {
+      "label": "Façade (toujours visible)",
+      "height": 338,
+      "zones": [
+        {
+          "id": "cardClean",
+          "label": "module CLEAN",
+          "x": 22,
+          "y": 32,
+          "w": 136,
+          "h": 226
+        },
+        {
+          "id": "cardRoom",
+          "label": "module ROOM",
+          "x": 166,
+          "y": 32,
+          "w": 136,
+          "h": 226
+        },
+        {
+          "id": "cardReverb",
+          "label": "module DE-REV",
+          "x": 312,
+          "y": 32,
+          "w": 136,
+          "h": 226
+        },
+        {
+          "id": "cardDeEss",
+          "label": "module DE-ESS",
+          "x": 456,
+          "y": 32,
+          "w": 136,
+          "h": 226
+        },
+        {
+          "id": "cardAir",
+          "label": "module AIR",
+          "x": 600,
+          "y": 32,
+          "w": 136,
+          "h": 226
+        }
+      ],
+      "controls": [
+        {
+          "id": "cleanSlider",
+          "label": "CLEAN knob",
+          "group": "facade",
+          "x": 45,
+          "y": 123,
+          "w": 94,
+          "h": 114
+        },
+        {
+          "id": "cleanLabel",
+          "label": "CLEAN",
+          "group": "text",
+          "x": 22,
+          "y": 243,
+          "w": 136,
+          "h": 14
+        },
+        {
+          "id": "roomSlider",
+          "label": "ROOM knob",
+          "group": "facade",
+          "x": 189,
+          "y": 123,
+          "w": 94,
+          "h": 114
+        },
+        {
+          "id": "roomLabel",
+          "label": "ROOM",
+          "group": "text",
+          "x": 166,
+          "y": 243,
+          "w": 136,
+          "h": 14
+        },
+        {
+          "id": "reverbSlider",
+          "label": "DE-REV knob",
+          "group": "facade",
+          "x": 333,
+          "y": 123,
+          "w": 94,
+          "h": 114
+        },
+        {
+          "id": "reverbLabel",
+          "label": "DE-REV",
+          "group": "text",
+          "x": 312,
+          "y": 242,
+          "w": 136,
+          "h": 14
+        },
+        {
+          "id": "deEssSlider",
+          "label": "DE-ESS knob",
+          "group": "facade",
+          "x": 477,
+          "y": 123,
+          "w": 94,
+          "h": 114
+        },
+        {
+          "id": "deEssLabel",
+          "label": "DE-ESS",
+          "group": "text",
+          "x": 456,
+          "y": 242,
+          "w": 136,
+          "h": 14
+        },
+        {
+          "id": "airSlider",
+          "label": "AIR knob",
+          "group": "facade",
+          "x": 621,
+          "y": 123,
+          "w": 94,
+          "h": 114
+        },
+        {
+          "id": "airLabel",
+          "label": "AIR",
+          "group": "text",
+          "x": 600,
+          "y": 242,
+          "w": 136,
+          "h": 14
+        },
+        {
+          "id": "cleanBypassBtn",
+          "label": "BYP",
+          "group": "btn",
+          "x": 32,
+          "y": 97,
+          "w": 26,
+          "h": 14
+        },
+        {
+          "id": "roomBypassBtn",
+          "label": "BYP",
+          "group": "btn",
+          "x": 176,
+          "y": 97,
+          "w": 26,
+          "h": 14
+        },
+        {
+          "id": "reverbBypassBtn",
+          "label": "BYP",
+          "group": "btn",
+          "x": 320,
+          "y": 97,
+          "w": 26,
+          "h": 14
+        },
+        {
+          "id": "deEssBypassBtn",
+          "label": "BYP",
+          "group": "btn",
+          "x": 464,
+          "y": 97,
+          "w": 26,
+          "h": 14
+        },
+        {
+          "id": "airBypassBtn",
+          "label": "BYP",
+          "group": "btn",
+          "x": 608,
+          "y": 97,
+          "w": 26,
+          "h": 14
+        },
+        {
+          "id": "deltaBtn",
+          "label": "Δ",
+          "group": "btn",
+          "x": 136,
+          "y": 97,
+          "w": 16,
+          "h": 14
+        },
+        {
+          "id": "roomDeltaBtn",
+          "label": "Δ",
+          "group": "btn",
+          "x": 280,
+          "y": 97,
+          "w": 16,
+          "h": 14
+        },
+        {
+          "id": "reverbDeltaBtn",
+          "label": "Δ",
+          "group": "btn",
+          "x": 424,
+          "y": 97,
+          "w": 16,
+          "h": 14
+        },
+        {
+          "id": "deEssDeltaBtn",
+          "label": "Δ",
+          "group": "btn",
+          "x": 568,
+          "y": 97,
+          "w": 16,
+          "h": 14
+        },
+        {
+          "id": "airDeltaBtn",
+          "label": "Δ",
+          "group": "btn",
+          "x": 712,
+          "y": 97,
+          "w": 16,
+          "h": 14
+        },
+        {
+          "id": "masterGainLabel",
+          "label": "OUTPUT",
+          "group": "text",
+          "x": 580,
+          "y": 42,
+          "w": 80,
+          "h": 16
+        },
+        {
+          "id": "masterGainSlider",
+          "label": "gain",
+          "group": "facade",
+          "x": 666,
+          "y": 36,
+          "w": 28,
+          "h": 28
+        },
+        {
+          "id": "globalBypassBtn",
+          "label": "INVISIBLE●FIX",
+          "group": "btn",
+          "x": 22,
+          "y": 40,
+          "w": 160,
+          "h": 28
+        },
+        {
+          "id": "browsePresetBtn",
+          "label": "≡",
+          "group": "preset",
+          "x": 4,
+          "y": 4,
+          "w": 24,
+          "h": 20
+        },
+        {
+          "id": "prevPresetBtn",
+          "label": "◀",
+          "group": "preset",
+          "x": 202,
+          "y": 2,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "id": "presetNameLabel",
+          "label": "preset name",
+          "group": "preset",
+          "x": 228,
+          "y": 0,
+          "w": 302,
+          "h": 28
+        },
+        {
+          "id": "nextPresetBtn",
+          "label": "▶",
+          "group": "preset",
+          "x": 532,
+          "y": 2,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "id": "savePresetBtn",
+          "label": "SAVE",
+          "group": "preset",
+          "x": 558,
+          "y": 5,
+          "w": 42,
+          "h": 18
+        },
+        {
+          "id": "initPresetBtn",
+          "label": "INIT",
+          "group": "preset",
+          "x": 602,
+          "y": 5,
+          "w": 40,
+          "h": 18
+        },
+        {
+          "id": "liveHQBtn",
+          "label": "LIVE/HQ",
+          "group": "preset",
+          "x": 644,
+          "y": 4,
+          "w": 68,
+          "h": 20
+        }
+      ]
+    },
+    "cleanAdv": {
+      "label": "Avancé — CLEAN",
+      "height": 525,
+      "zones": [
+        {
+          "id": "nrPanel",
+          "kind": "panel",
+          "label": "NOISE REDUCTION",
+          "x": 24,
+          "y": 309,
+          "w": 344,
+          "h": 184
+        },
+        {
+          "id": "gatePanel",
+          "kind": "panel",
+          "label": "GATE",
+          "x": 380,
+          "y": 309,
+          "w": 363,
+          "h": 184
+        }
+      ],
+      "controls": [
+        {
+          "id": "nrBandDisplay",
+          "label": "NR band display",
+          "group": "nr",
+          "x": 31,
+          "y": 336,
+          "w": 281,
+          "h": 114
+        },
+        {
+          "id": "nrBypassBtn",
+          "label": "NR BYP",
+          "group": "nr",
+          "x": 124,
+          "y": 320,
+          "w": 60,
+          "h": 13
+        },
+        {
+          "id": "nrRatioSlider",
+          "label": "NR Ratio",
+          "group": "nr",
+          "x": 31,
+          "y": 452,
+          "w": 236,
+          "h": 14
+        },
+        {
+          "id": "nrSmoothSlider",
+          "label": "NR Smooth",
+          "group": "nr",
+          "x": 31,
+          "y": 472,
+          "w": 236,
+          "h": 14
+        },
+        {
+          "id": "nrArtifactBlendSlider",
+          "label": "Artifact Blend",
+          "group": "nr",
+          "x": 322,
+          "y": 446,
+          "w": 35,
+          "h": 40
+        },
+        {
+          "id": "nrLearnBtn",
+          "label": "LEARN (à réafficher)",
+          "group": "hidden",
+          "x": 303,
+          "y": 320,
+          "w": 54,
+          "h": 13
+        },
+        {
+          "id": "gateBypassBtn",
+          "label": "GATE BYP",
+          "group": "gate",
+          "x": 416,
+          "y": 320,
+          "w": 66,
+          "h": 13
+        },
+        {
+          "id": "gateWaveform",
+          "label": "Gate waveform",
+          "group": "gate",
+          "x": 390,
+          "y": 336,
+          "w": 260,
+          "h": 114
+        },
+        {
+          "id": "gateAHR",
+          "label": "Gate AHR",
+          "group": "gate",
+          "x": 390,
+          "y": 452,
+          "w": 160,
+          "h": 34
+        },
+        {
+          "id": "plosiveProtectSlider",
+          "label": "PLOSIVE ⚠",
+          "group": "hidden",
+          "x": 675,
+          "y": 450,
+          "w": 44,
+          "h": 36
+        },
+        {
+          "id": "gateAutoBtn",
+          "label": "AUTO (à réafficher)",
+          "group": "hidden",
+          "x": 682,
+          "y": 320,
+          "w": 54,
+          "h": 13
+        },
+        {
+          "id": "nrRatioLabel",
+          "label": "ratio",
+          "group": "text",
+          "x": 267,
+          "y": 452,
+          "w": 38,
+          "h": 14
+        },
+        {
+          "id": "nrSmoothLabel",
+          "label": "smooth",
+          "group": "text",
+          "x": 267,
+          "y": 472,
+          "w": 38,
+          "h": 14
+        },
+        {
+          "id": "nrArtifactBlendLabel",
+          "label": "blend",
+          "group": "text",
+          "x": 319,
+          "y": 435,
+          "w": 42,
+          "h": 11
+        },
+        {
+          "id": "plosiveLabel",
+          "label": "PLOSIVE",
+          "group": "text",
+          "x": 663,
+          "y": 435,
+          "w": 68,
+          "h": 11
+        }
+      ]
+    },
+    "roomAdv": {
+      "label": "Avancé — ROOM",
+      "height": 493,
+      "zones": [
+        {
+          "id": "roomAnalysis",
+          "kind": "panel",
+          "label": "NOTCH ANALYSIS",
+          "x": 24,
+          "y": 309,
+          "w": 330,
+          "h": 152
+        },
+        {
+          "id": "roomParams",
+          "kind": "panel",
+          "label": "NOTCH PARAMETERS",
+          "x": 364,
+          "y": 309,
+          "w": 372,
+          "h": 152
+        }
+      ],
+      "controls": [
+        {
+          "id": "roomVisualizer",
+          "label": "Room heatmap",
+          "group": "room",
+          "x": 33,
+          "y": 301,
+          "w": 312,
+          "h": 121
+        },
+        {
+          "id": "advRoomFreqSlider",
+          "label": "FREQ",
+          "group": "room",
+          "x": 418,
+          "y": 301,
+          "w": 50,
+          "h": 56
+        },
+        {
+          "id": "advRoomQSlider",
+          "label": "Q",
+          "group": "room",
+          "x": 510,
+          "y": 301,
+          "w": 50,
+          "h": 56
+        },
+        {
+          "id": "advRoomDepthBoostSlider",
+          "label": "Depth Boost",
+          "group": "room",
+          "x": 600,
+          "y": 301,
+          "w": 50,
+          "h": 56
+        },
+        {
+          "id": "advRoomFreqLabel",
+          "label": "FREQ",
+          "group": "text",
+          "x": 416,
+          "y": 357,
+          "w": 54,
+          "h": 10
+        },
+        {
+          "id": "advRoomQLabel",
+          "label": "Q",
+          "group": "text",
+          "x": 508,
+          "y": 357,
+          "w": 54,
+          "h": 10
+        },
+        {
+          "id": "advRoomDepthBoostLabel",
+          "label": "DEPTH",
+          "group": "text",
+          "x": 598,
+          "y": 357,
+          "w": 54,
+          "h": 10
+        },
+        {
+          "id": "roomTrackerChip",
+          "label": "NOTCH TRACKER (chip peint)",
+          "group": "paint",
+          "x": 374,
+          "y": 397,
+          "w": 352,
+          "h": 56
+        }
+      ]
+    },
+    "deEssAdv": {
+      "label": "Avancé — DE-ESS",
+      "height": 493,
+      "zones": [
+        {
+          "id": "deEssPanel",
+          "kind": "panel",
+          "label": "DE-ESSER ADVANCED",
+          "x": 24,
+          "y": 309,
+          "w": 712,
+          "h": 135
+        }
+      ],
+      "controls": [
+        {
+          "id": "deEssDetect",
+          "label": "De-Ess detect canvas",
+          "group": "deess",
+          "x": 34,
+          "y": 304,
+          "w": 360,
+          "h": 84
+        },
+        {
+          "id": "advDeEssDetectSlider",
+          "label": "Q / Detect",
+          "group": "deess",
+          "x": 34,
+          "y": 393,
+          "w": 318,
+          "h": 16
+        },
+        {
+          "id": "deEssAR",
+          "label": "De-Ess AHR",
+          "group": "deess",
+          "x": 403,
+          "y": 304,
+          "w": 218,
+          "h": 60
+        },
+        {
+          "id": "advDeEssIntenSlider",
+          "label": "Intensity",
+          "group": "deess",
+          "x": 663,
+          "y": 305,
+          "w": 30,
+          "h": 88
+        },
+        {
+          "id": "advDeEssDetectLabel",
+          "label": "Q",
+          "group": "text",
+          "x": 362,
+          "y": 393,
+          "w": 18,
+          "h": 16
+        },
+        {
+          "id": "advDeEssIntenLabel",
+          "label": "INTEN",
+          "group": "text",
+          "x": 651,
+          "y": 393,
+          "w": 54,
+          "h": 10
+        }
+      ]
+    },
+    "deRevAdv": {
+      "label": "Avancé — DE-REV",
+      "height": 493,
+      "zones": [
+        {
+          "id": "deRevPanel",
+          "kind": "panel",
+          "label": "DE-REV ADVANCED",
+          "x": 24,
+          "y": 309,
+          "w": 712,
+          "h": 152
+        }
+      ],
+      "controls": [
+        {
+          "id": "deRevCanvas",
+          "label": "De-Rev 3-band canvas",
+          "group": "derev",
+          "x": 36,
+          "y": 305,
+          "w": 606,
+          "h": 120
+        },
+        {
+          "id": "deRevFloorSlider",
+          "label": "FLOOR",
+          "group": "derev",
+          "x": 657,
+          "y": 305,
+          "w": 50,
+          "h": 66
+        },
+        {
+          "id": "deRevLinkBtn",
+          "label": "LINK",
+          "group": "derev",
+          "x": 657,
+          "y": 397,
+          "w": 52,
+          "h": 18
+        },
+        {
+          "id": "deRevFloorLabel",
+          "label": "FLOOR",
+          "group": "text",
+          "x": 655,
+          "y": 366,
+          "w": 54,
+          "h": 10
+        }
+      ]
+    },
+    "airAdv": {
+      "label": "Avancé — AIR",
+      "height": 493,
+      "zones": [
+        {
+          "id": "airPanel",
+          "kind": "panel",
+          "label": "AIR CHARACTER",
+          "x": 24,
+          "y": 309,
+          "w": 712,
+          "h": 152
+        }
+      ],
+      "controls": [
+        {
+          "id": "advAirFreqSlider",
+          "label": "AIR freq",
+          "group": "air",
+          "x": 38,
+          "y": 406,
+          "w": 414,
+          "h": 20
+        },
+        {
+          "id": "advAirDriveSlider",
+          "label": "HEAT",
+          "group": "air",
+          "x": 464,
+          "y": 294,
+          "w": 50,
+          "h": 66
+        },
+        {
+          "id": "airSatTriodeBtn",
+          "label": "TRIODE",
+          "group": "air",
+          "x": 520,
+          "y": 302,
+          "w": 98,
+          "h": 19
+        },
+        {
+          "id": "airSatClassABtn",
+          "label": "CLASS-A",
+          "group": "air",
+          "x": 622,
+          "y": 302,
+          "w": 98,
+          "h": 19
+        },
+        {
+          "id": "airSatTapeBtn",
+          "label": "TAPE",
+          "group": "air",
+          "x": 520,
+          "y": 327,
+          "w": 98,
+          "h": 19
+        },
+        {
+          "id": "airSatIronBtn",
+          "label": "IRON",
+          "group": "air",
+          "x": 622,
+          "y": 327,
+          "w": 98,
+          "h": 19
+        },
+        {
+          "id": "advAirShapeLabel",
+          "label": "TRANSIENT SHAPE",
+          "group": "text",
+          "x": 464,
+          "y": 374,
+          "w": 264,
+          "h": 11
+        },
+        {
+          "id": "advAirShapeSlider",
+          "label": "shape",
+          "group": "air",
+          "x": 468,
+          "y": 385,
+          "w": 256,
+          "h": 20
+        },
+        {
+          "id": "advAirDriveLabel",
+          "label": "HEAT",
+          "group": "text",
+          "x": 460,
+          "y": 350,
+          "w": 58,
+          "h": 10
+        }
+      ]
+    }
+  },
+  "global": {
+    "note": "Éléments toujours visibles, ancrés à un bord — présents sur toutes les fenêtres. anchor 'br' = offsets 'right'/'bottom' depuis les bords ; anchor 'bottombar' = barre pleine largeur à 'bottom' du bas.",
+    "controls": [
+      {
+        "id": "tooltipBar",
+        "label": "Barre infobulle",
+        "group": "paint",
+        "anchor": "bottombar",
+        "bottom": 28,
+        "h": 28,
+        "w": 500
+      },
+      {
+        "id": "abBtnA",
+        "label": "A",
+        "group": "btn",
+        "anchor": "br",
+        "right": 212,
+        "bottom": 21,
+        "w": 24,
+        "h": 14
+      },
+      {
+        "id": "abArrowBtn",
+        "label": "→",
+        "group": "btn",
+        "anchor": "br",
+        "right": 186,
+        "bottom": 21,
+        "w": 36,
+        "h": 14
+      },
+      {
+        "id": "abBtnB",
+        "label": "B",
+        "group": "btn",
+        "anchor": "br",
+        "right": 148,
+        "bottom": 21,
+        "w": 24,
+        "h": 14
+      },
+      {
+        "id": "undoBtn",
+        "label": "↶",
+        "group": "btn",
+        "anchor": "br",
+        "right": 122,
+        "bottom": 21,
+        "w": 28,
+        "h": 14
+      },
+      {
+        "id": "redoBtn",
+        "label": "↷",
+        "group": "btn",
+        "anchor": "br",
+        "right": 92,
+        "bottom": 21,
+        "w": 28,
+        "h": 14
+      },
+      {
+        "id": "scaleBtn",
+        "label": "%",
+        "group": "btn",
+        "anchor": "br",
+        "right": 62,
+        "bottom": 21,
+        "w": 58,
+        "h": 14
+      }
+    ]
+  }
+}

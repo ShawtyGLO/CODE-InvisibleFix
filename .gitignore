@@ -27,3 +27,5 @@ DerivedData/
 *.o
 *.obj
 *.log
+# config locale de l-outil de dev
+.claude/

@@ -10,12 +10,19 @@
 class ArcFinLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
+    // Echelle courante de l'editeur, poussee depuis resized(). Les composants JUCE
+    // peignent dans leur propre repere (pas de transform globale), donc toute valeur
+    // en pixels doit etre multipliee ici, sinon epaisseurs et polices restent figees
+    // a leur taille 100% quand on redimensionne le plugin.
+    float uiScale = 1.0f;
+
     void drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
         float sliderPos, float startAngle, float endAngle, juce::Slider&) override
     {
-        bool   isLarge   = (width >= 70);
-        float  arcThick  = isLarge ? 5.5f : 4.0f;
-        float  inset     = isLarge ? 8.0f : 5.0f;
+        const float U = juce::jmax(0.01f, uiScale);
+        bool   isLarge   = (width >= (int)(70.0f * U));
+        float  arcThick  = (isLarge ? 5.5f : 4.0f) * U;
+        float  inset     = (isLarge ? 8.0f : 5.0f) * U;
 
         float  cx  = (float)x + (float)width  * 0.5f;
         float  cy  = (float)y + (float)height * 0.5f;
@@ -50,19 +57,20 @@ public:
         g.setColour(juce::Colours::white.withAlpha(0.45f));
         g.fillEllipse(cx - inR, cy - inR, inR * 2.0f, inR * 2.0f);
         g.setColour(Theme::accentAlt.withAlpha(0.20f));
-        g.drawEllipse(cx - inR + 0.75f, cy - inR + 0.75f,
-                      (inR - 0.75f) * 2.0f, (inR - 0.75f) * 2.0f, 1.0f);
+        const float ringW = 0.75f * U;
+        g.drawEllipse(cx - inR + ringW, cy - inR + ringW,
+                      (inR - ringW) * 2.0f, (inR - ringW) * 2.0f, 1.0f * U);
 
         // ── 4. Aiguille (rectangle arrondi gradient cyan→teal) ─────────────
-        float needleW  = isLarge ? 3.0f  : 2.5f;
-        float needleH  = isLarge ? 10.0f : 8.0f;
-        float needleTopY = isLarge ? 6.0f  : 4.0f;  // depuis le haut du cercle interne
+        float needleW  = (isLarge ? 3.0f  : 2.5f) * U;
+        float needleH  = (isLarge ? 10.0f : 8.0f) * U;
+        float needleTopY = (isLarge ? 6.0f : 4.0f) * U;  // depuis le haut du cercle interne
 
         // Dessin avant rotation : aiguille pointant vers 12h (y négatif = haut)
         float needleTopFromCenter = -(inR - needleTopY);
         juce::Path needle;
         needle.addRoundedRectangle(-needleW * 0.5f, needleTopFromCenter,
-                                    needleW, needleH, 1.0f);
+                                    needleW, needleH, 1.0f * U);
         needle.applyTransform(
             juce::AffineTransform::rotation(valAngle).translated(cx, cy));
 
@@ -76,8 +84,9 @@ public:
 
     juce::Font getLabelFont(juce::Label& lbl) override
     {
-        // Valeur numérique dans la textbox → léger
-        return juce::Font(juce::FontOptions(lbl.getHeight() > 12 ? 13.0f : 10.0f));
+        // Valeur numérique dans la textbox → léger, mise a l'echelle
+        const float U = juce::jmax(0.01f, uiScale);
+        return juce::Font(juce::FontOptions((lbl.getHeight() > (int)(12.0f * U) ? 13.0f : 10.0f) * U));
     }
 };
 
@@ -89,7 +98,8 @@ static ArcFinLookAndFeel arcFinLAF;
 class BypassButtonLAF : public juce::LookAndFeel_V4
 {
 public:
-    bool blinkOn = true;
+    bool  blinkOn = true;
+    float uiScale = 1.0f;   // pousse depuis resized()
 
     void drawButtonBackground(juce::Graphics&, juce::Button&,
                                const juce::Colour&, bool, bool) override {}
@@ -106,7 +116,7 @@ public:
         {
             g.setColour(Theme::textMuted);
         }
-        g.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
+        g.setFont(juce::Font(juce::FontOptions(8.0f * juce::jmax(0.01f, uiScale)).withStyle("Bold")));
         g.drawText(btn.getButtonText(), btn.getLocalBounds(), juce::Justification::centred);
     }
 };
@@ -118,7 +128,8 @@ static BypassButtonLAF bypassBtnLAF;
 class DeltaButtonLAF : public juce::LookAndFeel_V4
 {
 public:
-    bool blinkOn = true;
+    bool  blinkOn = true;
+    float uiScale = 1.0f;   // pousse depuis resized()
 
     void drawButtonBackground(juce::Graphics&, juce::Button&,
                                const juce::Colour&, bool, bool) override {}
@@ -135,7 +146,7 @@ public:
         {
             g.setColour(Theme::textMuted);
         }
-        g.setFont(juce::Font(juce::FontOptions(13.0f)));
+        g.setFont(juce::Font(juce::FontOptions(13.0f * juce::jmax(0.01f, uiScale))));
         g.drawText(btn.getButtonText(), btn.getLocalBounds(), juce::Justification::centred);
     }
 };
@@ -679,7 +690,7 @@ public:
             g.fillRoundedRectangle(0, 0, grSmooth * W, GR_H, 2.0f);
             g.setFont(juce::Font(juce::FontOptions(6.0f).withStyle("Bold")));
             g.setColour(Theme::curveBright);
-            g.drawText("GR \xe2\x88\x92" + juce::String((int)(grSmooth * 40)) + " dB",
+            g.drawText(juce::String::fromUTF8("GR \xe2\x88\x92") + juce::String((int)(grSmooth * 40)) + " dB",
                        3, 0, (int)(grSmooth * W + 2), (int)GR_H, juce::Justification::centredLeft);
         }
         // séparateur
@@ -774,7 +785,7 @@ public:
         g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
         g.setColour(latestOpen ? Theme::teal
                                : Theme::textMuted.withAlpha(0.50f));
-        g.drawText(latestOpen ? "\xe2\x97\x8f OPEN" : "\xe2\x97\x8b CLOSED",
+        g.drawText(juce::String::fromUTF8(latestOpen ? "\xe2\x97\x8f OPEN" : "\xe2\x97\x8b CLOSED"),
                    (int)(W - 50), (int)(WAVE_TOP + 2), 48, 10,
                    juce::Justification::centredRight);
 
@@ -2015,7 +2026,7 @@ public:
             // ── Étoile favoris ─────────────────────────────────────────
             g.setFont(juce::Font(juce::FontOptions(14.0f)));
             g.setColour(meta.isFav ? Theme::gold : Theme::textPrimary);
-            g.drawText(meta.isFav ? "\xe2\x98\x85" : "\xe2\x98\x86",
+            g.drawText(juce::String::fromUTF8(meta.isFav ? "\xe2\x98\x85" : "\xe2\x98\x86"),
                        8, ry + 6, 20, 20, juce::Justification::centred);
 
             // ── Nom preset ─────────────────────────────────────────────
@@ -2478,14 +2489,14 @@ public:
 
         static const char* bandName[3] = { "HF", "MF", "LF" };
         static const char* threshDesc[3] = {
-            "DE-REV HF SEUIL — drag gauche/droite. Separe la queue de reverb (rouge) du signal conserve. Aigus >4 kHz",
-            "DE-REV MF SEUIL — drag gauche/droite. Zone vocale principale 500-4000 Hz",
-            "DE-REV LF SEUIL — drag gauche/droite. Basses frequences <500 Hz — eviter de trop reduire"
+            "Drag gauche/droite. Sépare la queue de réverb (rouge) du signal conservé. Aigus > 4 kHz",
+            "Drag gauche/droite. Zone vocale principale, 500-4000 Hz",
+            "Drag gauche/droite. Basses fréquences < 500 Hz — éviter de trop réduire"
         };
         static const char* depthDesc[3] = {
-            "DE-REV HF PROFONDEUR — drag haut/bas. Intensite de la reduction sur les aigus (>4 kHz)",
-            "DE-REV MF PROFONDEUR — drag haut/bas. Intensite de la reduction sur les mediums (500-4000 Hz)",
-            "DE-REV LF PROFONDEUR — drag haut/bas. Intensite de la reduction sur les basses (<500 Hz)"
+            "Drag haut/bas. Intensité de la réduction sur les aigus (> 4 kHz)",
+            "Drag haut/bas. Intensité de la réduction sur les médiums (500-4000 Hz)",
+            "Drag haut/bas. Intensité de la réduction sur les basses (< 500 Hz)"
         };
 
         for (int i = 0; i < 3; ++i)
@@ -2497,14 +2508,16 @@ public:
             {
                 setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
                 if (onTooltipChange) onTooltipChange(
-                    juce::String("DE-REV ") + bandName[i] + " SEUIL", threshDesc[i]);
+                    juce::String("DE-REV ") + bandName[i] + " SEUIL",
+                    juce::String::fromUTF8(threshDesc[i]));
                 return;
             }
             if (mx > tx + 12.f && my > (float)(i * BH) && my < (float)((i + 1) * BH))
             {
                 setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
                 if (onTooltipChange) onTooltipChange(
-                    juce::String("DE-REV ") + bandName[i] + " PROFONDEUR", depthDesc[i]);
+                    juce::String("DE-REV ") + bandName[i] + " PROFONDEUR",
+                    juce::String::fromUTF8(depthDesc[i]));
                 return;
             }
         }
@@ -3299,6 +3312,11 @@ InvisibleFixAudioProcessorEditor::InvisibleFixAudioProcessorEditor(InvisibleFixA
     enableDblClick(deRevBandMFSlider.slider,   "deRevBandMF");
     enableDblClick(deRevBandHFSlider.slider,   "deRevBandHF");
 
+    // Figer les tailles de reference a 100% AVANT le premier setSize (qui declenche
+    // resized() et donc applyUiScale) : sinon on capturerait des valeurs deja mises
+    // a l'echelle et le facteur s'appliquerait deux fois.
+    captureSliderBaseSizes();
+
     // Restaurer le scale persisté (sauvegardé dans getStateInformation)
     currentScale = juce::jlimit(0.75f, 1.50f, audioProcessor.editorScale.load());
     resizeConstrainer.currentSnap = currentScale;
@@ -3413,6 +3431,50 @@ void InvisibleFixAudioProcessorEditor::setupModernSlider(ModernSlider& modernSli
     modernSlider.label.setJustificationType(juce::Justification::centred);
     modernSlider.label.setColour(juce::Label::textColourId, Theme::textMuted);
     addAndMakeVisible(modernSlider.label);
+
+    // Tout ModernSlider passe par ici : on l'enregistre pour la mise a l'echelle
+    scaledSliders.push_back(&modernSlider);
+}
+
+// =============================================================================
+//  MISE A L'ECHELLE DES COMPOSANTS JUCE
+//  paint() de l'editeur beneficie d'une transform scale(S), mais les composants
+//  enfants peignent dans leur propre repere : leurs polices et epaisseurs sont en
+//  pixels bruts. On fige donc les tailles de reference a 100%, puis on les
+//  re-applique multipliees par l'echelle courante.
+// =============================================================================
+void InvisibleFixAudioProcessorEditor::captureSliderBaseSizes()
+{
+    for (auto* ms : scaledSliders)
+    {
+        if (ms == nullptr || ms->baseCaptured) continue;
+        ms->baseTbPos  = ms->slider.getTextBoxPosition();
+        ms->baseTbW    = ms->slider.getTextBoxWidth();
+        ms->baseTbH    = ms->slider.getTextBoxHeight();
+        ms->baseLabelPt = ms->label.getFont().getHeight();
+        ms->baseCaptured = true;
+    }
+}
+
+void InvisibleFixAudioProcessorEditor::applyUiScale(float s)
+{
+    const float S = juce::jmax(0.01f, s);
+
+    // LookAndFeel : jauges d'arc, pastille centrale, aiguille, BYP, delta
+    arcFinLAF.uiScale      = S;
+    bypassBtnLAF.uiScale   = S;
+    deltaButtonLAF.uiScale = S;
+
+    // Valeurs sous les knobs + libelles de parametre
+    for (auto* ms : scaledSliders)
+    {
+        if (ms == nullptr || !ms->baseCaptured) continue;
+        if (ms->baseTbPos != juce::Slider::NoTextBox)
+            ms->slider.setTextBoxStyle(ms->baseTbPos, false,
+                                       juce::roundToInt(ms->baseTbW * S),
+                                       juce::roundToInt(ms->baseTbH * S));
+        ms->label.setFont(juce::Font(juce::FontOptions(ms->baseLabelPt * S)));
+    }
 }
 
 // =============================================================================
@@ -3516,16 +3578,20 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
 
     }
 
-    // ── Tout le contenu ci-dessous est décalé de 28px vers le bas ────────────
+    // ── Espace de coordonnées unique : fenêtre complète ──────────────────────
+    // y=0 = haut de la fenêtre, la barre preset occupe 0→28. C'est exactement la
+    // convention de tools/layout.json et de Plugin Factory : ce qui est peint ici
+    // et ce qui est placé dans resized() partagent donc le même repère.
+    // (Historiquement une translation de +28 s'appliquait ici, ce qui décalait tout
+    //  le dessin de 28px par rapport aux composants — d'où panneaux et infobulle faux.)
     g.saveState();
-    g.addTransform(juce::AffineTransform::translation(0.0f, 28.0f));
 
     // ── Header ───────────────────────────────────────────────────────────────
     // Wordmark gauche : INVISIBLE ● FIX — cliquable comme bypass-all
     bool bypassActive = audioProcessor.globalBypassActive.load();
     bool blinkVis     = bypassActive && bypassBlinkOn;  // vrai si le blink est visible
 
-    int hY = 12, hH = 28;
+    int hY = 40, hH = 28;
     auto titleFont = juce::Font(juce::FontOptions(17.0f));
     g.setFont(titleFont);
     g.setColour(Theme::textDark);
@@ -3557,9 +3623,9 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("V0.8  LAB STUDIO", (int)BW - 345, hY, 110, hH, juce::Justification::centredRight);
 
     // ── Cartes modules ───────────────────────────────────────────────────────
-    // x positions : [24,168,312,456,600], w=136, y=58, h=200
+    // x positions : [24,168,312,456,600], w=136, y=86, h=200
     const int modX[5]   = { 24, 168, 312, 456, 600 };
-    const int modW = 136, modY = 58, modH = 200;
+    const int modW = 136, modY = 86, modH = 200;
     const char* modNames[5] = { "CLEAN", "ROOM", "DE-REV", "DE-ESS", "AIR ENHANCER" };
 
     AdvancedTab tabForMod[5] = {
@@ -3623,7 +3689,7 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
         // Label "ADVANCED CONFIGURATION"
         g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
         g.setColour(Theme::textMuted);
-        g.drawText("ADVANCED CONFIGURATION", 24, 265, 300, 13, juce::Justification::centredLeft);
+        g.drawText("ADVANCED CONFIGURATION", 24, 293, 300, 13, juce::Justification::centredLeft);
 
         auto drawAdvPanel = [&](float px, float py, float pw, float ph, const juce::String& title)
         {
@@ -3638,6 +3704,20 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
         // Panneaux peints pilotés par les données (Source/Generated/UILayout.h ← tools/layout.json)
         auto drawPanel = [&](const UI::Panel& p){ drawAdvPanel(p.x, p.y, p.w, p.h, p.title); };
 
+        // Libellés peints pilotés par les données (idem). Position, texte, taille, graisse,
+        // alignement et alpha viennent de layout.json ; la couleur de base reste ici.
+        auto drawPText = [&](const UI::PText& p)
+        {
+            // style vide quand non-gras : identique à FontOptions(size) sans withStyle,
+            // comme les appels d'origine (et comme le défaut de Theme::font).
+            g.setFont(juce::Font(juce::FontOptions(p.size).withStyle(p.bold ? "Bold" : "")));
+            g.setColour(Theme::textMuted.withAlpha(p.alpha));
+            const juce::Justification just = p.align == 0 ? juce::Justification::centredLeft
+                                           : p.align == 2 ? juce::Justification::centredRight
+                                                          : juce::Justification::centred;
+            g.drawText(p.text, (int)p.x, (int)p.y, (int)p.w, (int)p.h, just);
+        };
+
         if (currentTab == AdvancedTab::Clean)
         {
             drawPanel(UI::panel::nr);
@@ -3645,16 +3725,15 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
 
             // Separateur vertical NR : band display / knobs
             g.setColour(Theme::textMuted.withAlpha(0.10f));
-            g.fillRect(157.0f, 294.0f, 1.0f, 132.0f);
+            g.fillRect(157.0f, 322.0f, 1.0f, 132.0f);
 
             // Separateur vertical Gate : rail / enveloppe
             g.setColour(Theme::textMuted.withAlpha(0.12f));
-            g.fillRect(462.0f, 294.0f, 1.0f, 132.0f);
+            g.fillRect(462.0f, 322.0f, 1.0f, 132.0f);
 
-            // Petit label "NR ACTIVITY" au-dessus du display bandes
-            g.setFont(juce::Font(juce::FontOptions(7.0f).withStyle("Bold")));
-            g.setColour(Theme::textMuted.withAlpha(0.6f));
-            g.drawText("NR ACTIVITY", 34, 294, 118, 9, juce::Justification::centred);
+            // Petit label "NR ACTIVITY" — sur la ligne du titre, entre les boutons
+            // NR BYP (124-184) et NR LEARN (303-357), pour ne pas chevaucher le titre.
+            drawPText(UI::ptext::cleanAdv::nrActivityCaption);
         }
         else if (currentTab == AdvancedTab::DeEss)
         {
@@ -3709,17 +3788,11 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
             }
 
             // ── Panneau droit : NOTCH PARAMETERS (x=364, w=372, h=152) ──
-            const UI::Panel& rp = UI::panel::roomParams;
-            float rpX = rp.x, rpY = rp.y, rpW = rp.w, rpH = rp.h;
-            drawAdvPanel(rpX, rpY, rpW, rpH, rp.title);
+            drawPanel(UI::panel::roomParams);
 
             // Labels au-dessus des knobs
-            g.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
-            g.setColour(Theme::textMuted);
-            g.drawText("NOTCH FREQ", (int)(rpX + 16), (int)(rpY + 26), 80, 10,
-                       juce::Justification::centredLeft);
-            g.drawText("NOTCH Q",    (int)(rpX + 112), (int)(rpY + 26), 60, 10,
-                       juce::Justification::centredLeft);
+            drawPText(UI::ptext::roomAdv::notchFreqCaption);
+            drawPText(UI::ptext::roomAdv::notchQCaption);
 
             // ── Chip NOTCH TRACKER — fréquence réelle du filtre + profondeur ────
             {
@@ -3729,8 +3802,10 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
                 float effectiveDB = -24.0f * juce::jmax(0.20f, dynDepth);
                 bool  isTracking  = std::abs(trackedFreq - manualFreq) > 8.0f;
 
-                float chipX = rpX + 10.0f, chipY = rpY + 88.0f;
-                float chipW = rpW - 20.0f, chipH = 56.0f;
+                // Position pilotée par les données (Source/Generated/UILayout.h ← tools/layout.json)
+                const UI::Rect& chip = UI::ctrl::roomAdv::roomTrackerChip;
+                float chipX = chip.x, chipY = chip.y;
+                float chipW = chip.w, chipH = chip.h;
 
                 // Fond — plus coloré si le tracking est actif
                 juce::Colour chipAccent = isTracking ? Theme::teal
@@ -3790,7 +3865,7 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
             };
 
             // ── Canvas spectre ────────────────────────────────────────────
-            float sX = 38.0f, sY = 302.0f, sW = 414.0f, sH = 72.0f;
+            float sX = 38.0f, sY = 330.0f, sW = 414.0f, sH = 72.0f;
             // Position du thumb alignée sur AirFreqSliderLAF (r=8px, plage APVTS)
             float thumbR = 8.0f;
             float fcNorm = (fc - 7000.0f) / 9000.0f;
@@ -3926,10 +4001,8 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
                        juce::Justification::centred);
 
             // ── Labels zone droite ────────────────────────────────────────
-            g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
-            g.setColour(Theme::textMuted.withAlpha(0.80f));
-            g.drawText("HEAT",     464, 283, 58,  10, juce::Justification::centred);
-            g.drawText("SAT TYPE", 520, 283, 200, 10, juce::Justification::centred);
+            drawPText(UI::ptext::airAdv::airHeatCaption);
+            drawPText(UI::ptext::airAdv::airSatTypeCaption);
 
             // ── Valeur % Drive sous le knob HEAT ──────────────────────────
             {
@@ -3937,7 +4010,7 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
                     (float)*audioProcessor.apvts.getRawParameterValue("airDrive"));
                 g.setFont(juce::Font(juce::FontOptions(8.0f).withStyle("Bold")));
                 g.setColour(Theme::accent);
-                g.drawText(juce::String(juce::roundToInt(drv * 100)) + " %", 460, 364, 58, 10,
+                g.drawText(juce::String(juce::roundToInt(drv * 100)) + " %", 460, 392, 58, 10,
                            juce::Justification::centred);
             }
 
@@ -3952,16 +4025,14 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
                 else                        { shapeTxt = "NEUTRAL"; shapeCol = Theme::textMuted; }
                 g.setFont(juce::Font(juce::FontOptions(7.5f).withStyle("Bold")));
                 g.setColour(shapeCol);
-                g.drawText(shapeTxt, 464, 408, 264, 10, juce::Justification::centred);
+                g.drawText(shapeTxt, 464, 436, 264, 10, juce::Justification::centred);
             }
 
             // ── CHARACTER — sous le slider de fréquence ───────────────────
-            g.setFont(juce::Font(juce::FontOptions(7.0f)));
-            g.setColour(Theme::textMuted.withAlpha(0.60f));
-            g.drawText("CHARACTER", 38, 428, 200, 10, juce::Justification::centredLeft);
+            drawPText(UI::ptext::airAdv::airCharacterCaption);
             g.setFont(juce::Font(juce::FontOptions(10.0f).withStyle("Bold")));
             g.setColour(Theme::accent);
-            g.drawText(fc > 12000.0f ? "PURE AIR" : "PRESENCE", 38, 438, 200, 12,
+            g.drawText(fc > 12000.0f ? "PURE AIR" : "PRESENCE", 38, 466, 200, 12,
                        juce::Justification::centredLeft);
 
         }
@@ -3970,25 +4041,52 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
     // ── Tooltip bar (bas du plugin) — memes couleurs que barre preset — ancrage : UI::anchor::bottomBar ───
     {
         const UI::AnchorBottomBar& tb = UI::anchor::bottomBar::tooltipBar;
-        float tbY = BH - tb.bottom; // bas de l'espace contenu (hors preset bar 28px)
-        // Fond identique a la barre preset
+        float tbY = BH - tb.bottom; // ancré au bas de la fenêtre (espace fenêtre complète)
+
+        // Structure miroir de la barre preset du haut :
+        //   - une BANDE pleine largeur (structurelle, toujours BW)
+        //   - une ZONE infobulle courte et delimitee dedans (largeur = tb.w, reglable dans PF)
+        //   - les boutons ancres a droite, separes par un trait vertical
+        const float zX      = 8.0f;            // marge gauche de la zone
+        const float BTN_SEP = BW - 226.0f;     // trait vertical avant les boutons ancres
+        // Borne haute : la zone ne peut jamais mordre sur le trait ni sur les boutons
+        const float zW = juce::jlimit(60.0f, BTN_SEP - zX - 2.0f, tb.w);
+
+        // Bande pleine largeur
         g.setColour(Theme::surfaceBar);
         g.fillRect(0.0f, tbY, BW, tb.h);
-        // Separateur haut
+        // Separateur haut (miroir du separateur bas de la barre preset)
         g.setColour(Theme::textMuted.withAlpha(0.28f));
         g.fillRect(0.0f, tbY, BW, 1.0f);
 
+        // Zone infobulle : degrade subtil remontant du bas (miroir de la zone nom)
+        juce::ColourGradient tipGrad(
+            Theme::surfaceEdge.withAlpha(0.55f), zX, tbY + tb.h,
+            Theme::surfaceBar.withAlpha(0.0f),   zX, tbY, false);
+        g.setGradientFill(tipGrad);
+        g.fillRect(zX, tbY + 1.0f, zW, tb.h - 1.0f);
+
+        // Traits verticaux delimitant la zone + trait avant les boutons
+        g.setColour(Theme::textMuted.withAlpha(0.20f));
+        g.fillRect(zX,      tbY + 5.0f, 1.0f, tb.h - 10.0f);
+        g.fillRect(zX + zW, tbY + 5.0f, 1.0f, tb.h - 10.0f);
+        g.fillRect(BTN_SEP, tbY + 5.0f, 1.0f, tb.h - 10.0f);
+
+        // Texte confine dans la zone courte
+        const int tX = (int)(zX + 7.0f);
         g.setFont(juce::Font(juce::FontOptions(9.0f)));
         if (currentTooltipText.isNotEmpty()) {
             // Nom du parametre en cyan
             g.setColour(Theme::accentDark);
-            g.drawText(currentTooltipParam + "  ", 10, (int)tbY, 140, (int)tb.h, juce::Justification::centredLeft);
+            g.drawText(currentTooltipParam + "  ", tX, (int)tbY, 132, (int)tb.h, juce::Justification::centredLeft);
             // Description en gris
             g.setColour(Theme::textSecondary);
-            g.drawText(currentTooltipText, 148, (int)tbY, (int)BW - 200, (int)tb.h, juce::Justification::centredLeft);
+            g.drawText(currentTooltipText, tX + 135, (int)tbY, (int)zW - 149, (int)tb.h,
+                       juce::Justification::centredLeft);
         } else {
             g.setColour(Theme::textMuted.withAlpha(0.50f));
-            g.drawText("Survoler un parametre pour voir sa description", 10, (int)tbY, (int)BW - 20, (int)tb.h, juce::Justification::centredLeft);
+            g.drawText(juce::String::fromUTF8("Survoler un paramètre pour voir sa description"),
+                       tX, (int)tbY, (int)zW - 14, (int)tb.h, juce::Justification::centredLeft);
         }
     }
 
@@ -3998,10 +4096,9 @@ void InvisibleFixAudioProcessorEditor::paint(juce::Graphics& g)
         juce::String gainStr = (gainDB >= 0.0f ? "+" : "") + juce::String(gainDB, 1) + " dB";
         g.setFont(juce::Font(juce::FontOptions(9.0f).withStyle("Bold")));
         g.setColour(Theme::textDark.withAlpha(0.75f));
-        g.drawText(gainStr, 697, 14, 56, 16, juce::Justification::centredLeft);
+        g.drawText(gainStr, 697, 42, 56, 16, juce::Justification::centredLeft);
     }
 
-    // Fin du bloc translaté de 22px (preset bar en haut)
     g.restoreState();
 }
 
@@ -4014,6 +4111,11 @@ void InvisibleFixAudioProcessorEditor::resized()
     currentScale = (float)getWidth() / 760.0f;
     resizeConstrainer.currentSnap = currentScale;
     const float S = currentScale;
+
+    // Jauges de knobs, pastille centrale, BYP, delta, valeurs sous les knobs :
+    // ces elements sont peints par les composants eux-memes, donc hors de la
+    // transform globale — il faut leur transmettre l'echelle explicitement.
+    applyUiScale(S);
 
     // Helpers : coordonnées base × S
     auto sc = [S](int v) { return (int)(v * S); };
@@ -4487,30 +4589,34 @@ void InvisibleFixAudioProcessorEditor::timerCallback()
 void InvisibleFixAudioProcessorEditor::mouseMove(const juce::MouseEvent& e)
 {
     const float S = juce::jmax(0.01f, currentScale);
-    // Les coordonnees sont dans l'espace du plugin (les modules sont decales de 28px preset bar)
+    // Espace fenêtre complète (y=0 = haut fenêtre), identique à layout.json et au dessin
     const float vx = (float)e.x / S;
-    const float vy = (float)e.y / S - 28.0f; // -28 pour ignorer la barre preset
+    const float vy = (float)e.y / S;
 
     struct TooltipEntry { float x, y, w, h; const char* param; const char* desc; };
     // Zones principales (modules facade)
     static const TooltipEntry zones[] = {
-        // Modules
-        {  24,  58, 136, 200, "CLEAN",              "Reducteur de bruit adaptatif + gate intelligent 3 bandes" },
-        { 168,  58, 136, 200, "ROOM",               "Notch dynamique : reduit les resonances de piece en temps reel" },
-        { 312,  58, 136, 200, "DE-REV",             "Suppresseur de reverb 3 bandes, style Cedar DNS" },
-        { 456,  58, 136, 200, "DE-ESS",             "Suppresseur de sibilances adaptatif avec look-ahead 2ms" },
-        { 600,  58, 136, 200, "AIR ENHANCER",       "Shelf haute frequence + excitateur harmonique (Drive)" },
-        // Header
-        {  22,  40, 160,  28, "BYPASS GLOBAL",      "Active/desactive tous les modules simultanement (A/B)" },
-        { 580,  40, 120,  28, "MASTER GAIN",        "Gain de sortie global en dB (drag vertical)" },
-        // Barre preset (vy < -18 = zone preset bar)
-        { 202, -26, 356,  26, "PRESET",             "Preset actif. Clic double pour renommer. Fleches pour naviguer." },
+        // Modules (mêmes coordonnées que les cartes peintes : modX/modY/modW/modH)
+        {  24,  86, 136, 200, "CLEAN",              "Réducteur de bruit adaptatif + gate intelligent 3 bandes" },
+        { 168,  86, 136, 200, "ROOM",               "Notch dynamique : réduit les résonances de pièce en temps réel" },
+        { 312,  86, 136, 200, "DE-REV",             "Suppresseur de réverb 3 bandes, style Cedar DNS" },
+        { 456,  86, 136, 200, "DE-ESS",             "Suppresseur de sibilances adaptatif avec look-ahead 2 ms" },
+        { 600,  86, 136, 200, "AIR ENHANCER",       "Shelf haute fréquence + excitateur harmonique (Drive)" },
+        // Header (mêmes coordonnées que les composants : UI::ctrl::facade)
+        {  22,  40, 160,  28, "BYPASS GLOBAL",      "Active/désactive tous les modules simultanément (A/B)" },
+        { 580,  36, 120,  28, "MASTER GAIN",        "Gain de sortie global en dB (drag vertical)" },
+        // Barre preset (0..28)
+        { 202,   2, 356,  26, "PRESET",             "Preset actif. Double-clic pour renommer. Flèches pour naviguer." },
     };
 
     juce::String newParam, newDesc;
     for (auto& t : zones) {
         if (vx >= t.x && vx < t.x + t.w && vy >= t.y && vy < t.y + t.h) {
-            newParam = t.param; newDesc = t.desc; break;
+            // fromUTF8 obligatoire : juce::String(const char*) interprete l'entree en
+            // ASCII et transforme accents et tirets cadratins en charabia.
+            newParam = juce::String::fromUTF8(t.param);
+            newDesc  = juce::String::fromUTF8(t.desc);
+            break;
         }
     }
 
@@ -4518,56 +4624,64 @@ void InvisibleFixAudioProcessorEditor::mouseMove(const juce::MouseEvent& e)
     if (newParam.isEmpty()) {
         struct CompTip { const char* name; const char* param; const char* desc; };
         static const CompTip compTips[] = {
-            { "advRoomFreqSlider",    "ROOM FREQ",       "Frequence cible du notch dynamique (Hz)" },
-            { "advRoomQSlider",       "ROOM Q",          "Selectivite du notch (Q eleve = bande etroite)" },
-            { "advDeEssFreqSlider",   "DE-ESS FREQ",     "Centre de la zone de detection sibilante (Hz)" },
-            { "advDeEssThreshSlider", "DE-ESS THRESH",   "Seuil de declenchement en dB (niveau minimum)" },
-            { "advDeEssIntenSlider",  "DE-ESS INTENSITY","Intensite de la reduction (ratio de compression)" },
-            { "advDeEssAtkSlider",    "DE-ESS ATTACK",   "Temps d'attaque du detecteur (ms)" },
-            { "advDeEssRelSlider",    "DE-ESS RELEASE",  "Temps de relachement du detecteur (ms)" },
-            { "advDeEssDetectSlider", "DE-ESS Q",        "Selectivite de la detection : bas=large/tolerant, haut=etroit/chirurgical (ratio spectral Weiss)" },
-            { "advGateThresholdSlider","GATE THRESHOLD", "Seuil de declenchement du gate (dBFS)" },
+            { "advRoomFreqSlider",    "ROOM FREQ",       "Fréquence cible du notch dynamique (Hz)" },
+            { "advRoomQSlider",       "ROOM Q",          "Sélectivité du notch (Q élevé = bande étroite)" },
+            { "advDeEssFreqSlider",   "DE-ESS FREQ",     "Centre de la zone de détection sibilante (Hz)" },
+            { "advDeEssThreshSlider", "DE-ESS THRESH",   "Seuil de déclenchement en dB (niveau minimum)" },
+            { "advDeEssIntenSlider",  "DE-ESS INTENSITY","Intensité de la réduction (ratio de compression)" },
+            { "advDeEssAtkSlider",    "DE-ESS ATTACK",   "Temps d'attaque du détecteur (ms)" },
+            { "advDeEssRelSlider",    "DE-ESS RELEASE",  "Temps de relâchement du détecteur (ms)" },
+            { "advDeEssDetectSlider", "DE-ESS Q",        "Sélectivité de la détection : bas = large/tolérant, haut = étroit/chirurgical (ratio spectral Weiss)" },
+            { "advGateThresholdSlider","GATE THRESHOLD", "Seuil de déclenchement du gate (dBFS)" },
             { "advGateAttackSlider",  "GATE ATTACK",     "Temps d'ouverture du gate (ms)" },
-            { "advGateHoldSlider",    "GATE HOLD",       "Temps de maintien apres fermeture (ms)" },
-            { "advGateFloorSlider",   "GATE FLOOR",      "Attenuation minimale quand gate ferme (dB)" },
+            { "advGateHoldSlider",    "GATE HOLD",       "Temps de maintien après fermeture (ms)" },
+            { "advGateFloorSlider",   "GATE FLOOR",      "Atténuation minimale quand le gate est fermé (dB)" },
             { "advCleanRelSlider",    "GATE RELEASE",    "Temps de fermeture du gate (ms)" },
-            { "plosiveProtectSlider", "PLOSIVE PROTECT", "Protege les plosives (P, B, T) contre la fermeture abusive du gate. 0=desactive, 1=tres sensible." },
-            { "nrThreshSlider",       "NR THRESHOLD",    "Seuil de reduction du bruit (dB) - drag sur spectre aussi" },
-            { "nrFloorSlider",        "NR FLOOR",        "Niveau plancher de reduction (dB) - drag sur spectre aussi" },
-            { "nrRatioSlider",        "NR CURVE",        "Courbe de reduction (ratio compression)" },
-            { "nrSmoothSlider",       "NR SMOOTH",       "Lissage temporel de la reduction (evite les artefacts)" },
-            { "deRevFloorSlider",   "DE-REV FLOOR", "Limite la reduction maximale du DE-REV par bande" },
-            { "deRevBandLFSlider", "DE-REV LF",    "Intensite de reduction sur les basses (<500 Hz) — bas = preserv basses, haut = retire rumble de salle" },
-            { "deRevBandMFSlider", "DE-REV MF",    "Intensite de reduction sur les mediums (500-4000 Hz) — zone vocale principale" },
-            { "deRevBandHFSlider", "DE-REV HF",    "Intensite de reduction sur les aigus (>4000 Hz) — shimmer et brillance de salle" },
-            { "advAirDriveSlider",    "AIR DRIVE",       "Intensite de l'excitateur harmonique haute frequence" },
-            { "advAirShapeSlider",    "TRANSIENT SHAPE",  "+ boost les attaques (intelligibilite, presence) / - adoucit les transitoires (chaleur, naturel)" },
-            { "nrArtifactBlendSlider","NR ARTIFACT BLEND","Melange vers une reduction plus douce pour limiter les artefacts de pompage" },
-            { "airSatTriodeBtn",      "TRIODE",           "Tube triode (ref. Neve 1073, Manley) - harmoniques paires (2e), chaleur asymetrique" },
-            { "airSatClassABtn",      "CLASS-A",          "Ampli classe A transistor (ref. SSL 4000, API) - harmoniques impaires (3e), mordant" },
-            { "airSatTapeBtn",        "TAPE",             "Bande magnetique (ref. Ampex ATR, Studer A800) - saturation tres douce, densite" },
-            { "airSatIronBtn",        "IRON",             "Transformateur de sortie (ref. Neve/Carnhill, API 2520) - genou net, caractere" },
+            { "plosiveProtectSlider", "PLOSIVE PROTECT", "Protège les plosives (P, B, T) contre la fermeture abusive du gate. 0 = désactivé, 1 = très sensible." },
+            { "nrThreshSlider",       "NR THRESHOLD",    "Seuil de réduction du bruit (dB) — drag sur le spectre aussi" },
+            { "nrFloorSlider",        "NR FLOOR",        "Niveau plancher de réduction (dB) — drag sur le spectre aussi" },
+            { "nrRatioSlider",        "NR CURVE",        "Courbe de réduction (ratio de compression)" },
+            { "nrSmoothSlider",       "NR SMOOTH",       "Lissage temporel de la réduction (évite les artefacts)" },
+            { "deRevFloorSlider",   "DE-REV FLOOR", "Limite la réduction maximale du DE-REV par bande" },
+            { "deRevBandLFSlider", "DE-REV LF",    "Intensité de réduction sur les basses (<500 Hz) — bas = préserve les basses, haut = retire le rumble de salle" },
+            { "deRevBandMFSlider", "DE-REV MF",    "Intensité de réduction sur les médiums (500-4000 Hz) — zone vocale principale" },
+            { "deRevBandHFSlider", "DE-REV HF",    "Intensité de réduction sur les aigus (>4000 Hz) — shimmer et brillance de salle" },
+            { "advAirDriveSlider",    "AIR DRIVE",       "Intensité de l'excitateur harmonique haute fréquence" },
+            { "advAirShapeSlider",    "TRANSIENT SHAPE",  "+ boost les attaques (intelligibilité, présence) / − adoucit les transitoires (chaleur, naturel)" },
+            { "nrArtifactBlendSlider","NR ARTIFACT BLEND","Mélange vers une réduction plus douce pour limiter les artefacts de pompage" },
+            { "airSatTriodeBtn",      "TRIODE",           "Tube triode (réf. Neve 1073, Manley) — harmoniques paires (2e), chaleur asymétrique" },
+            { "airSatClassABtn",      "CLASS-A",          "Ampli classe A transistor (réf. SSL 4000, API) — harmoniques impaires (3e), mordant" },
+            { "airSatTapeBtn",        "TAPE",             "Bande magnétique (réf. Ampex ATR, Studer A800) — saturation très douce, densité" },
+            { "airSatIronBtn",        "IRON",             "Transformateur de sortie (réf. Neve/Carnhill, API 2520) — genou net, caractère" },
         };
 
         auto* comp = getComponentAt(e.x, e.y);
         if (comp && comp != this) {
             auto n = comp->getName();
             for (auto& ct : compTips) {
-                if (n == ct.name) { newParam = ct.param; newDesc = ct.desc; break; }
+                if (n == ct.name) {
+                    newParam = juce::String::fromUTF8(ct.param);
+                    newDesc  = juce::String::fromUTF8(ct.desc);
+                    break;
+                }
             }
             // Fallback : boutons bypass et delta
             if (newParam.isEmpty()) {
                 const char* byNames[5] = { "BYP CLEAN","BYP ROOM","BYP DE-REV","BYP DE-ESS","BYP AIR" };
                 const char* byDescs[5] = {
                     "Bypass module CLEAN (le bruit passe sans traitement)",
-                    "Bypass module ROOM (le notch est desactive)",
-                    "Bypass module DE-REV (la reverb n'est pas traitee)",
+                    "Bypass module ROOM (le notch est désactivé)",
+                    "Bypass module DE-REV (la réverb n'est pas traitée)",
                     "Bypass module DE-ESS (les sibilances passent sans traitement)",
-                    "Bypass module AIR (le shelf et le drive sont desactives)"
+                    "Bypass module AIR (le shelf et le drive sont désactivés)"
                 };
                 CustomButton* byps[5] = { &cleanBypassBtn, &roomBypassBtn, &reverbBypassBtn, &deEssBypassBtn, &airBypassBtn };
                 for (int i = 0; i < 5; ++i)
-                    if (comp == &byps[i]->button) { newParam = byNames[i]; newDesc = byDescs[i]; break; }
+                    if (comp == &byps[i]->button) {
+                        newParam = juce::String::fromUTF8(byNames[i]);
+                        newDesc  = juce::String::fromUTF8(byDescs[i]);
+                        break;
+                    }
             }
         }
     }
@@ -4602,32 +4716,37 @@ void InvisibleFixAudioProcessorEditor::mouseUp(const juce::MouseEvent& event)
         return;
     }
 
-    // Convertir le clic (px écran) → espace virtuel (base 760px, hors preset bar 28px)
-    // screen = (virtual + 28) * S   →   virtual = screen/S - 28
+    // Convertir le clic (px écran) → espace fenêtre complète (base 760px, y=0 = haut fenêtre)
+    // screen = virtual * S   →   virtual = screen / S
     const float S = juce::jmax(0.01f, currentScale);
     const juce::Point<float> vClick(
         event.getPosition().x / S,
-        event.getPosition().y / S - 28.0f
+        event.getPosition().y / S
     );
 
     AdvancedTab clickedTab = AdvancedTab::None;
 
-    // Zones virtuelles (coordonnées de base 760px) : w=136, y=58 h=200
-    if      (juce::Rectangle<float>( 24, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::Clean;
-    else if (juce::Rectangle<float>(168, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::Room;
-    else if (juce::Rectangle<float>(312, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::DeRev;
-    else if (juce::Rectangle<float>(456, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::DeEss;
-    else if (juce::Rectangle<float>(600, 58, 136, 200).contains(vClick)) clickedTab = AdvancedTab::Air;
+    // Cartes modules (mêmes coordonnées que le dessin : modX/modY/modW/modH)
+    if      (juce::Rectangle<float>( 24, 86, 136, 200).contains(vClick)) clickedTab = AdvancedTab::Clean;
+    else if (juce::Rectangle<float>(168, 86, 136, 200).contains(vClick)) clickedTab = AdvancedTab::Room;
+    else if (juce::Rectangle<float>(312, 86, 136, 200).contains(vClick)) clickedTab = AdvancedTab::DeRev;
+    else if (juce::Rectangle<float>(456, 86, 136, 200).contains(vClick)) clickedTab = AdvancedTab::DeEss;
+    else if (juce::Rectangle<float>(600, 86, 136, 200).contains(vClick)) clickedTab = AdvancedTab::Air;
 
     if (clickedTab != AdvancedTab::None)
     {
         if (currentTab == clickedTab) currentTab = AdvancedTab::None;
         else                          currentTab = clickedTab;
 
+        // Hauteurs pilotées par les données (Source/Generated/UILayout.h ← tools/layout.json)
         const float S = currentScale;
-        if (currentTab == AdvancedTab::None)       setSize((int)(760*S), (int)(338*S));
-        else if (currentTab == AdvancedTab::Clean) setSize((int)(760*S), (int)(504*S));
-        else                                       setSize((int)(760*S), (int)(478*S));
+        float stateH = UI::stateHeight::facade;
+        if      (currentTab == AdvancedTab::Clean) stateH = UI::stateHeight::cleanAdv;
+        else if (currentTab == AdvancedTab::Room)  stateH = UI::stateHeight::roomAdv;
+        else if (currentTab == AdvancedTab::DeEss) stateH = UI::stateHeight::deEssAdv;
+        else if (currentTab == AdvancedTab::DeRev) stateH = UI::stateHeight::deRevAdv;
+        else if (currentTab == AdvancedTab::Air)   stateH = UI::stateHeight::airAdv;
+        setSize((int)(760*S), (int)(stateH*S));
 
         resized();
         repaint();
