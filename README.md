@@ -1,13 +1,12 @@
 # InvisibleFix
 
 Plugin de réparation vocale en C++ / JUCE : de-reverb, gate, nettoyage, traitement de pièce et
-air. Le plus avancé de la gamme Invisible, et le premier plugin que j'ai écrit.
+air. le premier plugin que j'ai crée.
 
 ## Ce qu'il fait
 
-Une chaîne pensée pour récupérer une prise de voix imparfaite : retirer la réverbération de la
-pièce, couper ce qu'il y a entre les phrases, nettoyer le grain, puis redonner de l'air en haut
-du spectre. L'ordre des étages est le sujet du projet autant que les étages eux-mêmes.
+Une chaîne pensée pour récupérer une prise de voix imparfaite : couper ce qu'il y a entre les phrases (bruits statiques, respirations, bruits de bouche, etc.), atténuer la résonance de la pièce, retirer la réverbération de la voix, nettoyer la voix des sibilances et plosives, puis redonner de l'air en haut
+du spectre. L'ordre des traitements a été pensé exprès pour fonctionner à chaque fois.
 
 ## Construire
 
