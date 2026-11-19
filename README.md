@@ -8,6 +8,13 @@ air. le premier plugin que j'ai crée.
 Une chaîne pensée pour récupérer une prise de voix imparfaite : couper ce qu'il y a entre les phrases (bruits statiques, respirations, bruits de bouche, etc.), atténuer la résonance de la pièce, retirer la réverbération de la voix, nettoyer la voix des sibilances et plosives, puis redonner de l'air en haut
 du spectre. L'ordre des traitements a été pensé exprès pour fonctionner le plus efficacement.
 
+## Pourquoi l'ordre compte
+
+Chaque étage modifie ce que le suivant croit voir. Nettoyer avant de dé-réverbérer ne donne pas
+le même résultat que l'inverse : la réverbération d'une pièce ressemble à du bruit pour un gate,
+et une sibilance déjà atténuée ne se détecte plus de la même façon. C'est la première chose que
+ce plugin m'a apprise, et c'est ce qui a demandé le plus d'essais.
+
 ## Construire
 
 Ouvrir `InvisibleFix.jucer` dans Projucer, puis compiler sous Visual Studio 2022.
